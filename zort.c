@@ -8,8 +8,15 @@
 #include <string.h>
 #include <sys/stat.h>
 
+struct benchmark {
+  size_t number;
+  char *path;
+  char *name;
+};
+
 struct zummary {
   char *name;
+  char *path;
   int status;
   double time;
   double real;
@@ -19,12 +26,7 @@ struct zummary {
     double real;
     double memory;
   } limit;
-};
-
-struct benchmark {
-  size_t number;
-  char *path;
-  char *name;
+  struct benchmark *benchmark;
 };
 
 static char *line;
@@ -39,6 +41,20 @@ static size_t size_benchmarks, capacity_benchmarks;
 static const char *benchmarks_path;
 static const char *directory_path;
 static char *zummary_path;
+
+static struct zummary *find_zummary(const char *name) {
+  for (size_t i = 0; i != size_zummaries; i++)
+    if (!strcmp(name, zummaries[i].name))
+      return zummaries + i;
+  return 0;
+}
+
+static struct benchmark *find_benchmark(const char *name) {
+  for (size_t i = 0; i != size_benchmarks; i++)
+    if (!strcmp(name, benchmarks[i].name))
+      return benchmarks + i;
+  return 0;
+}
 
 static void die(const char *, ...) __attribute__((format(printf, 1, 2)));
 
@@ -181,6 +197,19 @@ int main(int argc, char **argv) {
   }
   fclose(benchmarks_file);
   fclose(zummary_file);
+  for (size_t i = 0; i != size_zummaries; i++) {
+    struct zummary *zummary = zummaries + i;
+    struct benchmark *benchmark = find_benchmark(zummary->name);
+    if (!benchmark)
+      die("could not find zummary entry '%s' in benchmarks", zummary->name);
+    zummary->benchmark = benchmark;
+  }
+  for (size_t i = 0; i != size_benchmarks; i++) {
+    struct benchmark *benchmark = benchmarks + i;
+    struct zummary *zummary = find_zummary(benchmark->name);
+    if (!zummary)
+      die("could not find benchmark entry '%s' in zummary", benchmark->name);
+  }
   for (size_t i = 0; i != size_zummaries; i++)
     free(benchmarks[i].name);
   for (size_t i = 0; i != size_benchmarks; i++)
