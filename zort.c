@@ -32,6 +32,10 @@ struct zummary {
 static char *line;
 static size_t size_line, capacity_line;
 
+static FILE *file;
+static const char *file_name;
+static size_t lineno;
+
 static struct zummary *zummaries;
 static size_t size_zummaries, capacity_zummaries;
 
@@ -92,31 +96,39 @@ static bool directory_exists(const char *path) {
   return !stat(path, &buf) && (buf.st_mode & S_IFMT) == S_IFDIR;
 }
 
-static bool read_line(FILE *file, const char *path) {
+static void init_line_reading(FILE *f, const char *name) {
+  file = f;
+  file_name = name;
+  lineno = 0;
+}
+
+static bool read_line(void) {
   int ch = fgetc(file);
   if (ch == EOF)
     return false;
+  lineno++;
   if (ch == '\n')
-    die("empty line in '%s'", path);
+    die("empty line %zu in '%s'", lineno, file_name);
   size_line = 0;
   push_char(ch);
   while ((ch = fgetc(file)) != '\n')
     if (ch == EOF)
-      die("unexpected end-of-file before new-line in '%s'", path);
+      die("unexpected end-of-file before new-line in line %zu in '%s'", lineno,
+          file_name);
     else if (!ch)
-      die("unexpected zero character in '%s'", path);
+      die("unexpected zero character in line %zu in '%s'", lineno, file_name);
     else
       push_char(ch);
   push_char(0);
   return true;
 }
 
-static void parse_benchmark(struct benchmark *benchmark, const char *path) {
+static void parse_benchmark(struct benchmark *benchmark) {
   char *p = line;
   size_t number = 0;
   if (!isdigit(*p))
   EXPECTED_DIGIT:
-    die("expected digit in '%s'", path);
+    die("expected digit in line %zu '%s'", lineno, file_name);
   char ch;
   while ((ch = *p++) != ' ')
     if (!isdigit(ch))
@@ -127,13 +139,13 @@ static void parse_benchmark(struct benchmark *benchmark, const char *path) {
   char *q = p;
   while ((ch = *p) != ' ')
     if (!ch)
-      die("unexpected end-of-line in '%s'", path);
+      die("line %zu truncated in '%s'", lineno, file_name);
     else
       p++;
   *p++ = 0;
   if (!(benchmark->path = strdup(q)))
     out_of_memory("copying benchmark path in");
-  if (!(benchmark->name = strdup(p + 1)))
+  if (!(benchmark->name = strdup(p)))
     out_of_memory("copying benchmark name");
 }
 
@@ -147,7 +159,17 @@ static void push_benchmark(struct benchmark *benchmark) {
   benchmarks[size_benchmarks++] = *benchmark;
 }
 
-static void parse_zummary(struct zummary *zummary, const char *path) {}
+static void parse_zummary(struct zummary *zummary) {
+  char *p = line, ch;
+  while ((ch = *p) != ' ')
+    if (!ch)
+      die("line %zu truncated in '%s'", lineno, file_name);
+    else
+      p++;
+  *p++ = 0;
+  if (!(zummary->name = strdup(line)))
+    out_of_memory("allocating zummary name");
+}
 
 static void push_zummary(struct zummary *zummary) {
   if (size_zummaries == capacity_zummaries) {
@@ -165,7 +187,7 @@ int main(int argc, char **argv) {
     exit(1);
   }
   benchmarks_path = argv[1];
-  directory_path = argv[1];
+  directory_path = argv[2];
   if (!file_exists(benchmarks_path))
     die("benchmarks file '%s' does not exist", benchmarks_path);
   FILE *benchmarks_file = fopen(benchmarks_path, "r");
@@ -173,26 +195,28 @@ int main(int argc, char **argv) {
     die("could not open and read '%s'", benchmarks_path);
   if (!directory_exists(directory_path))
     die("directory '%s' does not exist", directory_path);
-  size_t zummary_path_len = strlen(directory_path) + strlen("/zummary") + 1;
+  size_t zummary_path_len = strlen(directory_path) + strlen("zummary") + 2;
   zummary_path = malloc(zummary_path_len);
   if (!zummary_path_len)
     out_of_memory("allocating zummary path");
+  snprintf(zummary_path, zummary_path_len, "%s/%s", directory_path, "zummary");
   if (!file_exists(zummary_path))
     die("zummary file '%s' does not exist", zummary_path);
-  snprintf(zummary_path, zummary_path_len, directory_path, "/zummary");
   FILE *zummary_file = fopen(zummary_path, "r");
   if (!zummary_file)
     die("could not open and read '%s'", zummary_path);
-  while (!read_line(benchmarks_file, benchmarks_path)) {
+  init_line_reading(benchmarks_file, benchmarks_path);
+  while (read_line()) {
     struct benchmark benchmark;
-    parse_benchmark(&benchmark, benchmarks_path);
+    parse_benchmark(&benchmark);
     push_benchmark(&benchmark);
   }
-  if (!read_line(zummary_file, zummary_path))
+  init_line_reading(zummary_file, zummary_path);
+  if (!read_line())
     die("failed to read header line in '%s'", zummary_path);
-  while (read_line(zummary_file, zummary_path)) {
+  while (read_line()) {
     struct zummary zummary;
-    parse_zummary(&zummary, zummary_path);
+    parse_zummary(&zummary);
     push_zummary(&zummary);
   }
   fclose(benchmarks_file);
@@ -211,9 +235,10 @@ int main(int argc, char **argv) {
       die("could not find benchmark entry '%s' in zummary", benchmark->name);
   }
   for (size_t i = 0; i != size_zummaries; i++)
-    free(benchmarks[i].name);
+    free(zummaries[i].name);
   for (size_t i = 0; i != size_benchmarks; i++)
     free(benchmarks[i].path), free(benchmarks[i].name);
+  free (zummaries);
   free(benchmarks);
   free(zummary_path);
   free(line);
