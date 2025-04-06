@@ -16,7 +16,6 @@ struct benchmark {
 
 struct zummary {
   char *name;
-  char *path;
   int status;
   double time;
   double real;
@@ -169,6 +168,10 @@ static void parse_zummary(struct zummary *zummary) {
   *p++ = 0;
   if (!(zummary->name = strdup(line)))
     out_of_memory("allocating zummary name");
+  if (sscanf(p, "%lf %lf %lf %lf %lf %lf", &zummary->time, &zummary->real,
+             &zummary->memory, &zummary->limit.time, &zummary->limit.real,
+             &zummary->limit.memory) != 6)
+    die("invalid zummary line %zu in '%s'", lineno, file_name);
 }
 
 static void push_zummary(struct zummary *zummary) {
@@ -238,7 +241,7 @@ int main(int argc, char **argv) {
     free(zummaries[i].name);
   for (size_t i = 0; i != size_benchmarks; i++)
     free(benchmarks[i].path), free(benchmarks[i].name);
-  free (zummaries);
+  free(zummaries);
   free(benchmarks);
   free(zummary_path);
   free(line);
