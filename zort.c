@@ -85,6 +85,7 @@ static char *zummary_path;
 
 static int verbosity;
 static size_t bucket_size;
+static size_t last_bucket_size;
 static size_t tasks;
 
 static struct bucket *buckets;
@@ -269,10 +270,10 @@ static void sort_zummaries_by_time() {
     for (size_t j = i + 1; j != size_zummaries; j++) {
       if (zummaries[j].scheduled)
         continue;
-      if (zummaries[i].memory < zummaries[j].memory)
+      if (zummaries[i].real < zummaries[j].real)
         continue;
-      if (zummaries[i].memory == zummaries[j].memory &&
-          zummaries[i].real <= zummaries[j].real)
+      if (zummaries[i].real == zummaries[j].real &&
+          zummaries[i].memory <= zummaries[j].memory)
         continue;
       struct zummary tmp = zummaries[i];
       zummaries[i] = zummaries[j];
@@ -282,7 +283,7 @@ static void sort_zummaries_by_time() {
 }
 
 static void schedule_zummary(struct bucket *bucket, struct zummary *zummary) {
-  assert (!zummary->scheduled);
+  assert(!zummary->scheduled);
   assert(bucket->size < bucket_size);
   bucket->zummaries[bucket->size++] = zummary;
   if (bucket->real < zummary->real)
@@ -290,6 +291,18 @@ static void schedule_zummary(struct bucket *bucket, struct zummary *zummary) {
   bucket->memory += zummary->memory;
   zummary->scheduled = true;
   scheduled++;
+}
+
+static size_t next_bucket(size_t j) {
+  assert(j < tasks);
+  size_t res = j;
+  for (;;) {
+    if (++res == tasks)
+      res = 0;
+    size_t max_size = (res + 1 == tasks) ? last_bucket_size : bucket_size;
+    if (buckets[res].size < max_size)
+      return res;
+  }
 }
 
 int main(int argc, char **argv) {
@@ -388,6 +401,7 @@ int main(int argc, char **argv) {
     if (!benchmark)
       die("could not find zummary entry '%s' in benchmarks", zummary->name);
     zummary->benchmark = benchmark;
+    zummary->scheduled = false;
   }
   for (size_t i = 0; i != size_benchmarks; i++) {
     struct benchmark *benchmark = benchmarks + i;
@@ -407,15 +421,17 @@ int main(int argc, char **argv) {
     msg("using default bucket size %zu", bucket_size);
   }
   tasks = size_benchmarks / bucket_size;
-  if (tasks * bucket_size == size_benchmarks)
+  if (tasks * bucket_size == size_benchmarks) {
     msg("need exactly %zu tasks "
         "(number of benchmarks multiple of bucket size)",
         tasks);
-  else {
+    last_bucket_size = bucket_size;
+  } else {
     tasks++;
+    last_bucket_size = size_benchmarks % bucket_size;
     msg("need %zu tasks "
         "(%zu full buckets and one with %zu benchmarks)",
-        tasks, tasks - 1, size_benchmarks % bucket_size);
+        tasks, tasks - 1, last_bucket_size);
   }
   buckets = calloc(tasks, sizeof *buckets);
   if (!buckets)
@@ -430,38 +446,38 @@ int main(int argc, char **argv) {
     struct zummary *zummary = zummaries + i;
     if (zummary->status != 10 && zummary->status != 20)
       continue;
-    if (zummary->memory > 4000)
+    if (zummary->memory > 8000)
       continue;
     assert(!zummary->scheduled);
     struct bucket *bucket = buckets + j;
     schedule_zummary(bucket, zummary);
     zummary->scheduled = true;
-    if (buckets[j].size >= bucket_size && ++j == tasks / 2)
+    if (buckets[j].size >= bucket_size && ++j == (tasks + 0) / 2)
       break;
   }
   sort_zummaries_by_memory();
-  size_t first = 0, last = size_zummaries;
-  while (first <= last) {
-#if 0
-    struct zummary *zummary =
-        zummaries + ((scheduled & 1) ? --last : first++);
-#else
+  size_t last = size_zummaries;
+  j = tasks - 1;
+  for (;;) {
     struct zummary *zummary = zummaries + --last;
-#endif
     if (zummary->scheduled)
       continue;
     struct bucket *bucket = buckets + j;
     schedule_zummary(bucket, zummary);
     zummary->scheduled = true;
-    if (buckets[j].size >= bucket_size && ++j == tasks / 2)
+    if (scheduled != size_zummaries)
+      j = next_bucket(j);
+    else
       break;
   }
-  assert (scheduled == size_benchmarks);
-  assert(j == size_benchmarks / bucket_size);
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
-    msg("task[%zu] maximum-time %f, total-memory %f", i + 1, bucket->real,
+    msg("task[%zu] maximum-time %.2f, total-memory %.2f", i + 1, bucket->real,
         bucket->memory);
+    for (size_t j = 0; j != bucket->size; j++) {
+      struct zummary *zummary = bucket->zummaries[j];
+      msg("  %.2f %.0f %s", zummary->real, zummary->memory, zummary->name);
+    }
   }
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
