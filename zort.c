@@ -6,6 +6,7 @@ static const char * usage =
 "where '<option>' is one of the following\n"
 "\n"
 "  -h | --help     print this command line summary\n"
+"  -q | --quiet    no messages at all (default disabled)\n"
 "  -v | --verbose  print verbose messages (default disabled)\n"
 "  -<n>            bucket size (default 64)\n"
 "\n"
@@ -107,6 +108,7 @@ static struct benchmark *find_benchmark(const char *name) {
 
 static void die(const char *, ...) __attribute__((format(printf, 1, 2)));
 static void msg(const char *, ...) __attribute__((format(printf, 1, 2)));
+static void vrb(const char *, ...) __attribute__((format(printf, 1, 2)));
 
 static void die(const char *fmt, ...) {
   fputs("zort: error: ", stderr);
@@ -119,8 +121,21 @@ static void die(const char *fmt, ...) {
 }
 
 static void msg(const char *fmt, ...) {
+  if (verbosity < 0)
+    return;
+  fflush(stdout);
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  fputc('\n', stderr);
+  fflush(stderr);
+}
+
+static void vrb(const char *fmt, ...) {
   if (verbosity < 1)
     return;
+  fflush(stdout);
   va_list ap;
   va_start(ap, fmt);
   vfprintf(stderr, fmt, ap);
@@ -312,7 +327,9 @@ int main(int argc, char **argv) {
       fputs(usage, stdout);
       fflush(stdout);
       return 0;
-    } else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose"))
+    } else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet"))
+      verbosity = -1;
+    else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose"))
       verbosity = 1;
     else if (arg[0] == '-' && isdigit(arg[1])) {
       bucket_size = arg[1] - '0';
@@ -470,15 +487,21 @@ int main(int argc, char **argv) {
     else
       break;
   }
+  size_t printed = 0;
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
     msg("task[%zu] maximum-time %.2f, total-memory %.2f", i + 1, bucket->real,
         bucket->memory);
     for (size_t j = 0; j != bucket->size; j++) {
       struct zummary *zummary = bucket->zummaries[j];
-      msg("  %.2f %.0f %s", zummary->real, zummary->memory, zummary->name);
+      struct benchmark *benchmark = zummary->benchmark;
+      assert(zummary->scheduled);
+      assert(benchmark);
+      vrb("  %.2f %.2f %s", zummary->real, zummary->memory, zummary->name);
+      printf("%zu %s %s\n", ++printed, benchmark->path, zummary->name);
     }
   }
+  fflush(stdout);
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
   free(buckets);
