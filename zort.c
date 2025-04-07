@@ -1,3 +1,32 @@
+// clang-format off
+
+static const char * usage =
+"usage: zort [ <option> ] [ <benchmarks> ] <directory>\n"
+"\n"
+"where '<option>' is one of the following\n"
+"\n"
+"  -h | --help     print this command line summary\n"
+"  -v | --verbose  print verbose messages (default disabled)\n"
+"  -<n>            bucket size (default 64)\n"
+"\n"
+"and '<benchmarks>' is file which has three fields per line separated by\n"
+"spaces, where the first gives the benchmark order the second gives the\n"
+"path to the benchmark and the third a unique name of the benchmark.\n"
+"The '<directory>' is supposed to contain a 'zummary' file produced\n"
+"by the 'zummarize' tool (which is meant to parse 'runlim' output).\n"
+"If '<benchmark>' is missing it is searched as 'benchmarks' next 'zummary'\n"
+"in the same directory.  The tool then reads both files and tries to\n"
+"match names.  If this is successful it sorts the benchmarks according to\n"
+"the memory usage and time needed to solve them and puts them into buckets\n"
+"of the given size (default 64). It then produces a new list of benchmarks\n"
+"ordered by the bucket assignment on '<stdout>'.  The primary goal is to\n"
+"maximize memory availability per bucket, and the secondary goal is to\n"
+"minimize the maximum running time per bucket.\n"
+
+;
+
+// clang-format on
+
 #include <assert.h>
 #include <ctype.h>
 #include <fcntl.h>
@@ -26,6 +55,14 @@ struct zummary {
     double memory;
   } limit;
   struct benchmark *benchmark;
+  bool scheduled;
+};
+
+struct bucket {
+  double real;
+  double memory;
+  size_t size;
+  struct zummary **zummaries;
 };
 
 static char *line;
@@ -42,8 +79,16 @@ static struct benchmark *benchmarks;
 static size_t size_benchmarks, capacity_benchmarks;
 
 static const char *benchmarks_path;
+static char *missing_benchmarks_path;
 static const char *directory_path;
 static char *zummary_path;
+
+static int verbosity;
+static size_t bucket_size;
+static size_t tasks;
+
+static struct bucket *buckets;
+static size_t scheduled;
 
 static struct zummary *find_zummary(const char *name) {
   for (size_t i = 0; i != size_zummaries; i++)
@@ -60,6 +105,7 @@ static struct benchmark *find_benchmark(const char *name) {
 }
 
 static void die(const char *, ...) __attribute__((format(printf, 1, 2)));
+static void msg(const char *, ...) __attribute__((format(printf, 1, 2)));
 
 static void die(const char *fmt, ...) {
   fputs("zort: error: ", stderr);
@@ -69,6 +115,17 @@ static void die(const char *fmt, ...) {
   va_end(ap);
   fputc('\n', stderr);
   exit(1);
+}
+
+static void msg(const char *fmt, ...) {
+  if (verbosity < 1)
+    return;
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  fputc('\n', stderr);
+  fflush(stderr);
 }
 
 static void out_of_memory(const char *what) { die("out-of-memory %s", what); }
@@ -168,9 +225,9 @@ static void parse_zummary(struct zummary *zummary) {
   *p++ = 0;
   if (!(zummary->name = strdup(line)))
     out_of_memory("allocating zummary name");
-  if (sscanf(p, "%lf %lf %lf %lf %lf %lf", &zummary->time, &zummary->real,
-             &zummary->memory, &zummary->limit.time, &zummary->limit.real,
-             &zummary->limit.memory) != 6)
+  if (sscanf(p, "%d %lf %lf %lf %lf %lf %lf", &zummary->status, &zummary->time,
+             &zummary->real, &zummary->memory, &zummary->limit.time,
+             &zummary->limit.real, &zummary->limit.memory) != 7)
     die("invalid zummary line %zu in '%s'", lineno, file_name);
 }
 
@@ -184,20 +241,117 @@ static void push_zummary(struct zummary *zummary) {
   zummaries[size_zummaries++] = *zummary;
 }
 
-int main(int argc, char **argv) {
-  if (argc != 3) {
-    fputs("usage: zort <benchmarks> <dir>\n", stderr);
-    exit(1);
+static void sort_zummaries_by_memory() {
+  assert(size_zummaries);
+  for (size_t i = 0; i != size_zummaries - 1; i++) {
+    if (zummaries[i].scheduled)
+      continue;
+    for (size_t j = i + 1; j != size_zummaries; j++) {
+      if (zummaries[j].scheduled)
+        continue;
+      if (zummaries[i].memory < zummaries[j].memory)
+        continue;
+      if (zummaries[i].memory == zummaries[j].memory &&
+          zummaries[i].real <= zummaries[j].real)
+        continue;
+      struct zummary tmp = zummaries[i];
+      zummaries[i] = zummaries[j];
+      zummaries[j] = tmp;
+    }
   }
-  benchmarks_path = argv[1];
-  directory_path = argv[2];
+}
+
+static void sort_zummaries_by_time() {
+  assert(size_zummaries);
+  for (size_t i = 0; i != size_zummaries - 1; i++) {
+    if (zummaries[i].scheduled)
+      continue;
+    for (size_t j = i + 1; j != size_zummaries; j++) {
+      if (zummaries[j].scheduled)
+        continue;
+      if (zummaries[i].memory < zummaries[j].memory)
+        continue;
+      if (zummaries[i].memory == zummaries[j].memory &&
+          zummaries[i].real <= zummaries[j].real)
+        continue;
+      struct zummary tmp = zummaries[i];
+      zummaries[i] = zummaries[j];
+      zummaries[j] = tmp;
+    }
+  }
+}
+
+static void schedule_zummary(struct bucket *bucket, struct zummary *zummary) {
+  assert (!zummary->scheduled);
+  assert(bucket->size < bucket_size);
+  bucket->zummaries[bucket->size++] = zummary;
+  if (bucket->real < zummary->real)
+    bucket->real = zummary->real;
+  bucket->memory += zummary->memory;
+  zummary->scheduled = true;
+  scheduled++;
+}
+
+int main(int argc, char **argv) {
+  for (int i = 1; i != argc; i++) {
+    const char *arg = argv[i];
+    if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
+      fputs(usage, stdout);
+      fflush(stdout);
+      return 0;
+    } else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose"))
+      verbosity = 1;
+    else if (arg[0] == '-' && isdigit(arg[1])) {
+      bucket_size = arg[1] - '0';
+      const size_t max_size_t = ~(size_t)0;
+      char ch;
+      for (const char *p = arg + 2; (ch = *p); p++) {
+        if (max_size_t / 10 < bucket_size)
+        INVALID_BUCKET_SIZE:
+          die("invalid bucket size '%s'", arg + 1);
+        bucket_size *= 10;
+        const unsigned digit = ch - '0';
+        if (max_size_t - digit < bucket_size)
+          goto INVALID_BUCKET_SIZE;
+        bucket_size += digit;
+      }
+      if (!bucket_size)
+        goto INVALID_BUCKET_SIZE;
+    } else if (arg[0] == '-')
+      die("invalid option '%s' (try '-h')", arg);
+    else if (!benchmarks_path)
+      benchmarks_path = arg;
+    else if (!directory_path)
+      directory_path = arg;
+    else
+      die("too many arguments '%s', '%s' and '%s' (try '-h')", benchmarks_path,
+          directory_path, arg);
+  }
+  if (!benchmarks_path) {
+    assert(!directory_path);
+    die("benchmark and directory path missing (try '-h')");
+  }
+  if (!directory_path) {
+    directory_path = benchmarks_path;
+    if (!directory_exists(directory_path))
+    DIRECTORY_DOES_NOT_EXISTS:
+      die("directory '%s' does not exist", directory_path);
+    size_t missing_benchmarks_path_len =
+        strlen(directory_path) + strlen("benchmarks") + 2;
+    missing_benchmarks_path = malloc(missing_benchmarks_path_len);
+    if (!missing_benchmarks_path)
+      out_of_memory("allocating missing benchmarks paths");
+    snprintf(missing_benchmarks_path, missing_benchmarks_path_len, "%s/%s",
+             directory_path, "benchmarks");
+    benchmarks_path = missing_benchmarks_path;
+  }
   if (!file_exists(benchmarks_path))
     die("benchmarks file '%s' does not exist", benchmarks_path);
   FILE *benchmarks_file = fopen(benchmarks_path, "r");
   if (!benchmarks_file)
     die("could not open and read '%s'", benchmarks_path);
-  if (!directory_exists(directory_path))
-    die("directory '%s' does not exist", directory_path);
+  if (!missing_benchmarks_path && !directory_exists(directory_path))
+    goto DIRECTORY_DOES_NOT_EXISTS;
   size_t zummary_path_len = strlen(directory_path) + strlen("zummary") + 2;
   zummary_path = malloc(zummary_path_len);
   if (!zummary_path_len)
@@ -214,6 +368,10 @@ int main(int argc, char **argv) {
     parse_benchmark(&benchmark);
     push_benchmark(&benchmark);
   }
+  fclose(benchmarks_file);
+  if (!size_benchmarks)
+    die("could not find any benchmark in '%s'", benchmarks_path);
+  msg("parsed %zu benchmarks in '%s'", size_benchmarks, benchmarks_path);
   init_line_reading(zummary_file, zummary_path);
   if (!read_line())
     die("failed to read header line in '%s'", zummary_path);
@@ -222,8 +380,8 @@ int main(int argc, char **argv) {
     parse_zummary(&zummary);
     push_zummary(&zummary);
   }
-  fclose(benchmarks_file);
   fclose(zummary_file);
+  msg("parsed %zu zummaries in '%s'", size_zummaries, zummary_path);
   for (size_t i = 0; i != size_zummaries; i++) {
     struct zummary *zummary = zummaries + i;
     struct benchmark *benchmark = find_benchmark(zummary->name);
@@ -237,12 +395,84 @@ int main(int argc, char **argv) {
     if (!zummary)
       die("could not find benchmark entry '%s' in zummary", benchmark->name);
   }
+  if (size_benchmarks == size_zummaries)
+    msg("zummaries and benchmarks match (found %zu of both)", size_zummaries);
+  else
+    die("%zu benchmarks different from %zu zummaries", size_benchmarks,
+        size_zummaries);
+  if (bucket_size)
+    msg("using specified bucket size %zu", bucket_size);
+  else {
+    bucket_size = 64;
+    msg("using default bucket size %zu", bucket_size);
+  }
+  tasks = size_benchmarks / bucket_size;
+  if (tasks * bucket_size == size_benchmarks)
+    msg("need exactly %zu tasks "
+        "(number of benchmarks multiple of bucket size)",
+        tasks);
+  else {
+    tasks++;
+    msg("need %zu tasks "
+        "(%zu full buckets and one with %zu benchmarks)",
+        tasks, tasks - 1, size_benchmarks % bucket_size);
+  }
+  buckets = calloc(tasks, sizeof *buckets);
+  if (!buckets)
+    out_of_memory("allocating buckets");
+  for (size_t i = 0; i != tasks; i++)
+    if (!(buckets[i].zummaries =
+              malloc(bucket_size * sizeof *buckets[i].zummaries)))
+      out_of_memory("allocating bucket");
+  sort_zummaries_by_time();
+  size_t j = 0;
+  for (size_t i = 0; i != size_zummaries; i++) {
+    struct zummary *zummary = zummaries + i;
+    if (zummary->status != 10 && zummary->status != 20)
+      continue;
+    if (zummary->memory > 4000)
+      continue;
+    assert(!zummary->scheduled);
+    struct bucket *bucket = buckets + j;
+    schedule_zummary(bucket, zummary);
+    zummary->scheduled = true;
+    if (buckets[j].size >= bucket_size && ++j == tasks / 2)
+      break;
+  }
+  sort_zummaries_by_memory();
+  size_t first = 0, last = size_zummaries;
+  while (first <= last) {
+#if 0
+    struct zummary *zummary =
+        zummaries + ((scheduled & 1) ? --last : first++);
+#else
+    struct zummary *zummary = zummaries + --last;
+#endif
+    if (zummary->scheduled)
+      continue;
+    struct bucket *bucket = buckets + j;
+    schedule_zummary(bucket, zummary);
+    zummary->scheduled = true;
+    if (buckets[j].size >= bucket_size && ++j == tasks / 2)
+      break;
+  }
+  assert (scheduled == size_benchmarks);
+  assert(j == size_benchmarks / bucket_size);
+  for (size_t i = 0; i != tasks; i++) {
+    struct bucket *bucket = buckets + i;
+    msg("task[%zu] maximum-time %f, total-memory %f", i + 1, bucket->real,
+        bucket->memory);
+  }
+  for (size_t i = 0; i != tasks; i++)
+    free(buckets[i].zummaries);
+  free(buckets);
   for (size_t i = 0; i != size_zummaries; i++)
     free(zummaries[i].name);
   for (size_t i = 0; i != size_benchmarks; i++)
     free(benchmarks[i].path), free(benchmarks[i].name);
   free(zummaries);
   free(benchmarks);
+  free(missing_benchmarks_path);
   free(zummary_path);
   free(line);
   return 0;
