@@ -27,11 +27,13 @@ static const char * usage =
 "in the given directory.  The tool then reads both files and tries to\n"
 "match names.  If this is successful it sorts the benchmarks according to\n"
 "the memory usage of that recorded run and time needed to solve them and\n"
-"puts them into buckets of the given size (default 64).  " It then produces\n"
-"a new list of benchmarks ordered by the bucket assignment on 'stdout' (in\n"
-"the same format as the original benchmark file) and on 'stderr' reports\n"
-"expected maximum running time per bucket (if all jobs in that bucket /\n"
-"task are run in parallel) and the sum of the memory usage of those jobs.\n"
+"puts them into buckets of the given size (default 64).\n"
+"\n"
+"It then produces a new list of benchmarks ordered by the bucket assignment\n"
+"on 'stdout' (in the same format as the original benchmark file) and on\n"
+"'stderr' reports expected maximum running time per bucket (if all jobs in\n"
+"that bucket / task are run in parallel) and the sum of the memory usage\n"
+"of those jobs.\n"
 "\n"
 "The primary goal is to maximize memory usage per job / benchmark, while\n"
 "trying to stay a total limit of available per task (SLURM parlance) and\n"
@@ -99,6 +101,8 @@ static const char *directory_path;
 static char *zummary_path;
 
 static int verbosity;
+static unsigned fast_bucket_fraction;
+static unsigned fast_bucket_memory;
 static size_t bucket_size;
 static size_t last_bucket_size;
 static size_t tasks;
@@ -345,7 +349,23 @@ int main(int argc, char **argv) {
       verbosity = -1;
     else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose"))
       verbosity = 1;
-    else if (arg[0] == '-' && isdigit(arg[1])) {
+    else if (!strcmp(arg, "-f")) {
+      if (++i == argc)
+      ARGUMENT_MISSING:
+        die("argument to '%s' missing", arg);
+      int tmp = atoi(argv[i]);
+      if (tmp <= 0 || tmp > 100)
+      INVALID_ARGUMENT:
+        die("invalid argument in '%s %s'", arg, argv[i]);
+      fast_bucket_fraction = tmp;
+    } else if (!strcmp(arg, "-l")) {
+      if (++i == argc)
+        goto ARGUMENT_MISSING;
+      int tmp = atoi(argv[i]);
+      if (tmp < 0)
+        goto INVALID_ARGUMENT;
+      fast_bucket_memory = tmp;
+    } else if (arg[0] == '-' && isdigit(arg[1])) {
       bucket_size = arg[1] - '0';
       const size_t max_size_t = ~(size_t)0;
       char ch;
@@ -450,6 +470,20 @@ int main(int argc, char **argv) {
   else {
     bucket_size = 64;
     msg("using default bucket size %zu", bucket_size);
+  }
+  if (fast_bucket_fraction)
+    msg("using specified fast bucket fraction %u%%\n", fast_bucket_fraction);
+  else {
+    fast_bucket_fraction = FAST_BUCKET_FRACTION;
+    msg("using default fast bucket fraction %u%%\n", fast_bucket_fraction);
+  }
+  if (fast_bucket_memory)
+    msg("using specified fast bucket memory limit of %u MB\n",
+        fast_bucket_memory);
+  else {
+    fast_bucket_memory = FAST_BUCKET_MEMORY;
+    msg("using default fast bucket memory limit of %u MB\n",
+        fast_bucket_memory);
   }
   tasks = size_benchmarks / bucket_size;
   if (tasks * bucket_size == size_benchmarks) {
