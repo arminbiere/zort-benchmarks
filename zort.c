@@ -73,12 +73,14 @@ struct zummary {
   } limit;
   struct benchmark *benchmark;
   bool scheduled;
+  bool memory_limit_hit;
 };
 
 struct bucket {
   double real;
   double memory;
   size_t size;
+  size_t memory_limit_hit;
   struct zummary **zummaries;
 };
 
@@ -100,6 +102,7 @@ static const char *benchmarks_path;
 static char *missing_benchmarks_path;
 static const char *directory_path;
 static char *zummary_path;
+static double max_memory;
 
 static int verbosity;
 static unsigned fast_bucket_fraction;
@@ -108,6 +111,7 @@ static size_t bucket_size;
 static size_t last_bucket_size;
 static size_t tasks;
 
+static size_t max_memory_limit_hit;
 static struct bucket *buckets;
 static size_t scheduled;
 
@@ -319,6 +323,8 @@ static void parse_zummary(struct zummary *zummary) {
              &zummary->real, &zummary->memory, &zummary->limit.time,
              &zummary->limit.real, &zummary->limit.memory) != 7)
     die("invalid zummary line %zu in '%s'", lineno, file_name);
+  if (max_memory < zummary->memory)
+    max_memory = zummary->memory;
 }
 
 static void push_zummary(struct zummary *zummary) {
@@ -378,6 +384,13 @@ static void schedule_zummary(struct bucket *bucket, struct zummary *zummary) {
   if (bucket->real < zummary->real)
     bucket->real = zummary->real;
   bucket->memory += zummary->memory;
+  if (zummary->status == 2 || zummary->memory >= zummary->limit.memory) {
+    zummary->memory_limit_hit = true;
+    bucket->memory_limit_hit++;
+    if (max_memory_limit_hit < bucket->memory_limit_hit)
+      max_memory_limit_hit = bucket->memory_limit_hit;
+  } else
+    zummary->memory_limit_hit = false;
   zummary->scheduled = true;
   scheduled++;
 }
@@ -393,6 +406,10 @@ static size_t next_bucket(size_t j) {
       return res;
   }
 }
+
+static double average(double a, double b) { return b ? a / b : a; }
+
+static double percent(double a, double b) { return average(100 * a, b); }
 
 int main(int argc, char **argv) {
   for (int i = 1; i != argc; i++) {
@@ -538,8 +555,7 @@ int main(int argc, char **argv) {
         fast_bucket_memory);
   else {
     fast_bucket_memory = FAST_BUCKET_MEMORY;
-    msg("using default fast bucket memory limit of %u MB",
-        fast_bucket_memory);
+    msg("using default fast bucket memory limit of %u MB", fast_bucket_memory);
   }
   tasks = size_benchmarks / bucket_size;
   if (tasks * bucket_size == size_benchmarks) {
@@ -595,8 +611,8 @@ int main(int argc, char **argv) {
   double max_total_memory = 0;
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
-    msg("task[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1, bucket->real,
-        bucket->memory);
+    msg("task[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1,
+        bucket->real, bucket->memory);
     if (bucket->memory > max_total_memory)
       max_total_memory = bucket->memory;
     for (size_t j = 0; j != bucket->size; j++) {
@@ -604,7 +620,8 @@ int main(int argc, char **argv) {
       struct benchmark *benchmark = zummary->benchmark;
       assert(zummary->scheduled);
       assert(benchmark);
-      vrb("  %.2f %.2f %s", zummary->real, zummary->memory, zummary->name);
+      vrb("  %.2f %.2f %s%s", zummary->real, zummary->memory, zummary->name,
+          zummary->memory_limit_hit ? " *" : "");
       printf("%zu", ++printed);
       if (benchmark->path)
         fputc(' ', stdout), fputs(benchmarks->path, stdout);
@@ -613,7 +630,10 @@ int main(int argc, char **argv) {
     }
   }
   fflush(stdout);
-  msg ("maximum total-memory per bucket %.0f MB", max_total_memory);
+  msg("maximum total-memory per bucket %.0f MB", max_total_memory);
+  msg("maximum memory per benchmark %.0f MB %.0f%%", max_memory,
+      percent(max_memory, max_total_memory));
+  msg("maximum memory limit hit per bucket %zu", max_memory_limit_hit);
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
   free(buckets);
