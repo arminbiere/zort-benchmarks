@@ -1,5 +1,8 @@
 // clang-format off
 
+#define FAST_BUCKET_FRACTION 50
+#define FAST_BUCKET_MEMORY 8000
+
 static const char * usage =
 "usage: zort [ <option> ] [ <benchmarks> ] <directory>\n"
 "\n"
@@ -8,6 +11,8 @@ static const char * usage =
 "  -h | --help     print this command line summary\n"
 "  -q | --quiet    no messages at all (default disabled)\n"
 "  -v | --verbose  print verbose messages (default disabled)\n"
+"  -f <percent>    fraction of fast buckets in percent (default %u%%)\n"
+"  -l <memory>     fast bucket memory limit in MB (default %u MB)\n"
 "  -<n>            bucket size (default 64)\n"
 "\n"
 "and '<benchmarks>' is file which has three fields per line separated by\n"
@@ -324,7 +329,7 @@ int main(int argc, char **argv) {
   for (int i = 1; i != argc; i++) {
     const char *arg = argv[i];
     if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
-      fputs(usage, stdout);
+      printf(usage, FAST_BUCKET_FRACTION, FAST_BUCKET_MEMORY);
       fflush(stdout);
       return 0;
     } else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet"))
