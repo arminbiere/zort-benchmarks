@@ -534,11 +534,11 @@ int main(int argc, char **argv) {
     msg("using default fast bucket fraction %u%%", fast_bucket_fraction);
   }
   if (fast_bucket_memory)
-    msg("using specified fast bucket memory limit of %u MB\n",
+    msg("using specified fast bucket memory limit of %u MB",
         fast_bucket_memory);
   else {
     fast_bucket_memory = FAST_BUCKET_MEMORY;
-    msg("using default fast bucket memory limit of %u MB\n",
+    msg("using default fast bucket memory limit of %u MB",
         fast_bucket_memory);
   }
   tasks = size_benchmarks / bucket_size;
