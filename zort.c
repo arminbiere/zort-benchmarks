@@ -94,6 +94,7 @@ static size_t size_zummaries, capacity_zummaries;
 
 static struct benchmark *benchmarks;
 static size_t size_benchmarks, capacity_benchmarks;
+static int entries_per_benchmark_line;
 
 static const char *benchmarks_path;
 static char *missing_benchmarks_path;
@@ -213,7 +214,53 @@ static bool read_line(void) {
   return true;
 }
 
-static void parse_benchmark(struct benchmark *benchmark) {
+static void determine_entries_per_benchmark_line(void) {
+  assert(!entries_per_benchmark_line);
+  const char *p = line;
+  int spaces = 0;
+  char ch;
+  while ((ch = *p++))
+    if (ch == ' ')
+      spaces++;
+  if (!spaces)
+    die("expected at least one space in line %zu in '%s'", lineno, file_name);
+  else if (spaces > 2)
+    die("%d spaces in line %zu in '%s' (expected 2 or 3)", spaces, lineno,
+        file_name);
+  entries_per_benchmark_line = spaces + 1;
+  if (entries_per_benchmark_line == 2)
+    msg("assuming two entries per benchmark line");
+  else {
+    assert(entries_per_benchmark_line == 3);
+    msg("assuming three entries per benchmark line");
+  }
+}
+
+static void parse_benchmark2(struct benchmark *benchmark) {
+  char *p = line;
+  size_t number = 0;
+  if (!isdigit(*p))
+  EXPECTED_DIGIT:
+    die("expected digit in line %zu in '%s'", lineno, file_name);
+  char ch;
+  while ((ch = *p++) != ' ')
+    if (!isdigit(ch))
+      goto EXPECTED_DIGIT;
+    else
+      number = 10 * number + (ch - '0');
+  benchmark->number = number;
+  char *q = p;
+  while ((ch = *p))
+    if (ch == ' ')
+      die("unexpected second space in line %zu in '%s'", lineno, file_name);
+    else
+      p++;
+  benchmark->path = 0;
+  if (!(benchmark->name = strdup(q)))
+    out_of_memory("copying benchmark name");
+}
+
+static void parse_benchmark3(struct benchmark *benchmark) {
   char *p = line;
   size_t number = 0;
   if (!isdigit(*p))
@@ -237,6 +284,15 @@ static void parse_benchmark(struct benchmark *benchmark) {
     out_of_memory("copying benchmark path in");
   if (!(benchmark->name = strdup(p)))
     out_of_memory("copying benchmark name");
+}
+
+static void parse_benchmark(struct benchmark *benchmark) {
+  if (!entries_per_benchmark_line)
+    determine_entries_per_benchmark_line();
+  if (entries_per_benchmark_line == 2)
+    parse_benchmark2(benchmark);
+  else
+    parse_benchmark3(benchmark);
 }
 
 static void push_benchmark(struct benchmark *benchmark) {
@@ -472,10 +528,10 @@ int main(int argc, char **argv) {
     msg("using default bucket size %zu", bucket_size);
   }
   if (fast_bucket_fraction)
-    msg("using specified fast bucket fraction %u%%\n", fast_bucket_fraction);
+    msg("using specified fast bucket fraction %u%%", fast_bucket_fraction);
   else {
     fast_bucket_fraction = FAST_BUCKET_FRACTION;
-    msg("using default fast bucket fraction %u%%\n", fast_bucket_fraction);
+    msg("using default fast bucket fraction %u%%", fast_bucket_fraction);
   }
   if (fast_bucket_memory)
     msg("using specified fast bucket memory limit of %u MB\n",
@@ -536,20 +592,28 @@ int main(int argc, char **argv) {
       break;
   }
   size_t printed = 0;
+  double max_total_memory = 0;
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
-    msg("task[%zu] maximum-time %.2f, total-memory %.2f", i + 1, bucket->real,
+    msg("task[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1, bucket->real,
         bucket->memory);
+    if (bucket->memory > max_total_memory)
+      max_total_memory = bucket->memory;
     for (size_t j = 0; j != bucket->size; j++) {
       struct zummary *zummary = bucket->zummaries[j];
       struct benchmark *benchmark = zummary->benchmark;
       assert(zummary->scheduled);
       assert(benchmark);
       vrb("  %.2f %.2f %s", zummary->real, zummary->memory, zummary->name);
-      printf("%zu %s %s\n", ++printed, benchmark->path, zummary->name);
+      printf("%zu", ++printed);
+      if (benchmark->path)
+        fputc(' ', stdout), fputs(benchmarks->path, stdout);
+      fputc(' ', stdout), fputs(zummary->name, stdout);
+      fputc('\n', stdout);
     }
   }
   fflush(stdout);
+  msg ("maximum total-memory per bucket %.0f MB", max_total_memory);
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
   free(buckets);
