@@ -506,18 +506,18 @@ int main(int argc, char **argv) {
               malloc(bucket_size * sizeof *buckets[i].zummaries)))
       out_of_memory("allocating bucket");
   sort_zummaries_by_time();
-  size_t j = 0;
+  size_t j = 0, limit = (fast_bucket_fraction * tasks) / 100u;
   for (size_t i = 0; i != size_zummaries; i++) {
     struct zummary *zummary = zummaries + i;
     if (zummary->status != 10 && zummary->status != 20)
       continue;
-    if (zummary->memory > 8000)
+    if (zummary->memory > fast_bucket_memory)
       continue;
     assert(!zummary->scheduled);
     struct bucket *bucket = buckets + j;
     schedule_zummary(bucket, zummary);
     zummary->scheduled = true;
-    if (buckets[j].size >= bucket_size && ++j == (tasks + 0) / 2)
+    if (buckets[j].size >= bucket_size && ++j == limit)
       break;
   }
   sort_zummaries_by_memory();
