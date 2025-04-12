@@ -249,10 +249,10 @@ static void determine_entries_per_benchmark_line(void) {
         file_name);
   entries_per_benchmark_line = spaces + 1;
   if (entries_per_benchmark_line == 2)
-    msg("assuming two entries per benchmark line");
+    msg("found two entries per benchmark line");
   else {
     assert(entries_per_benchmark_line == 3);
-    msg("assuming three entries per benchmark line");
+    msg("found three entries per benchmark line");
   }
 }
 
