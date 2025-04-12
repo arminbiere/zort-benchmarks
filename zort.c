@@ -71,10 +71,13 @@ static const char * usage =
 #include <string.h>
 #include <sys/stat.h>
 
+struct zummary;
+
 struct benchmark {
   size_t number;
   char *path;
   char *name;
+  struct zummary *zummary;
 };
 
 struct zummary {
@@ -613,6 +616,7 @@ int main(int argc, char **argv) {
     struct zummary *zummary = find_zummary(benchmark->name);
     if (!zummary)
       die("could not find benchmark entry '%s' in zummary", benchmark->name);
+    benchmark->zummary = zummary;
   }
   if (size_benchmarks == size_zummaries)
     vrb(1, "zummaries and benchmarks match (found %zu of both)",
@@ -679,12 +683,14 @@ int main(int argc, char **argv) {
               malloc(bucket_size * sizeof *buckets[i].zummaries)))
       out_of_memory("allocating bucket");
   if (keep) {
-    for (size_t i = 0, j = 0; i != size_zummaries; i++) {
-      struct zummary *zummary = zummaries + i;
+    for (size_t i = 0, j = 0; i != size_benchmarks; i++) {
+      struct benchmark * benchmark = benchmarks + i;
+      struct zummary *zummary = benchmark->zummary;
+      assert (zummary);
       assert(!zummary->scheduled);
+      assert (zummary->benchmark == benchmark);
       struct bucket *bucket = buckets + j;
       schedule_zummary(bucket, zummary);
-      zummary->scheduled = true;
       if (buckets[j].size >= bucket_size)
         j++;
     }
@@ -758,7 +764,7 @@ int main(int argc, char **argv) {
   msg("allocated core-time of %.2f core-hours (%.0f = %zu * %.0f sec)",
       core_hours, core_seconds, bucket_size, sum_real);
   double power_usage = core_hours * watt_per_core / 1000.0;
-  msg("power usage of %.3f kWh (%u W * %.2fh / 1000)", power_usage,
+  msg("power usage of %.3f kWh (%u W * %.2f h / 1000)", power_usage,
       watt_per_core, core_hours);
   sort_buckets_by_real();
   nodes = calloc(size_nodes, sizeof *nodes);
@@ -792,7 +798,8 @@ int main(int argc, char **argv) {
     if (end > latency)
       latency = end;
   }
-  msg("latency of %.0f seconds (%.2f hours)", latency, latency / 2600);
+  msg("latency of %.0f seconds (%.2f h running %zu nodes in parallel)",
+      latency, latency / 2600, size_nodes);
   double costs = cents_per_kwh * power_usage / 100.0;
   msg("costs %s %.2f (¢ %d * %.3f kWh / 100)", use_euro_sign ? "€" : "$", costs,
       cents_per_kwh, power_usage);
