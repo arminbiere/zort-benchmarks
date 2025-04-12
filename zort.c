@@ -147,7 +147,7 @@ static struct benchmark *find_benchmark(const char *name) {
 
 static void die(const char *, ...) __attribute__((format(printf, 1, 2)));
 static void msg(const char *, ...) __attribute__((format(printf, 1, 2)));
-static void vrb(const char *, ...) __attribute__((format(printf, 1, 2)));
+static void vrb(int, const char *, ...) __attribute__((format(printf, 2, 3)));
 
 static void die(const char *fmt, ...) {
   fputs("zort: error: ", stderr);
@@ -171,8 +171,8 @@ static void msg(const char *fmt, ...) {
   fflush(stderr);
 }
 
-static void vrb(const char *fmt, ...) {
-  if (verbosity < 1)
+static void vrb(int level, const char *fmt, ...) {
+  if (verbosity < level)
     return;
   fflush(stdout);
   va_list ap;
@@ -428,17 +428,27 @@ static double average(double a, double b) { return b ? a / b : a; }
 static double percent(double a, double b) { return average(100 * a, b); }
 
 int main(int argc, char **argv) {
+  const char *quiet_options = 0;
+  const char *verbose_option = 0;
   for (int i = 1; i != argc; i++) {
     const char *arg = argv[i];
     if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
       printf(usage, FAST_BUCKET_FRACTION, FAST_BUCKET_MEMORY, WATT_PER_CORE);
       fflush(stdout);
       return 0;
-    } else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet"))
+    } else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet")) {
+      if (verbose_option)
+        die("unexpected '%s' option after '%s'", arg, verbose_option);
+      quiet_options = arg;
       verbosity = -1;
-    else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose"))
-      verbosity = 1;
-    else if (!strcmp(arg, "-k") || !strcmp(arg, "--keep"))
+    } else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose")) {
+      if (quiet_options)
+        die("unexpected '%s' option after '%s'", arg, quiet_options);
+      if (verbosity == 2)
+        die("can not increase verbosity more than two times");
+      verbose_option = arg;
+      verbosity++;
+    } else if (!strcmp(arg, "-k") || !strcmp(arg, "--keep"))
       keep = true;
     else if (!strcmp(arg, "-n") || !strcmp(arg, "--no-print") ||
              !strcmp(arg, "--no-printing"))
@@ -636,7 +646,7 @@ int main(int argc, char **argv) {
       schedule_zummary(bucket, zummary);
       zummary->scheduled = true;
       if (buckets[j].size >= bucket_size)
-	j++;
+        j++;
     }
   } else {
     sort_zummaries_by_time();
@@ -675,7 +685,7 @@ int main(int argc, char **argv) {
   double max_total_memory = 0;
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
-    msg("task[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1,
+    vrb(1, "task[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1,
         bucket->real, bucket->memory);
     if (bucket->memory > max_total_memory)
       max_total_memory = bucket->memory;
@@ -685,7 +695,7 @@ int main(int argc, char **argv) {
       struct benchmark *benchmark = zummary->benchmark;
       assert(zummary->scheduled);
       assert(benchmark);
-      vrb("  %.2f %.2f %s%s", zummary->real, zummary->memory, zummary->name,
+      vrb(2, "  %.2f %.2f %s%s", zummary->real, zummary->memory, zummary->name,
           zummary->memory_limit_hit ? " *" : "");
       if (!print)
         continue;
