@@ -1,5 +1,7 @@
 // clang-format off
 
+#define WATT_PER_CORE 8
+#define CENTS_PER_KWH 27
 #define FAST_BUCKET_FRACTION 50
 #define FAST_BUCKET_MEMORY 8000
 
@@ -8,12 +10,16 @@ static const char * usage =
 "\n"
 "where '<option>' is one of the following:\n"
 "\n"
-"  -h | --help     print this command line summary\n"
-"  -q | --quiet    no messages at all (default disabled)\n"
-"  -v | --verbose  print verbose messages (default disabled)\n"
-"  -f <percent>    fraction of fast buckets in percent (default %u%%)\n"
-"  -l <memory>     fast bucket memory limit in MB (default %u MB)\n"
-"  -<n>            bucket size (default 64)\n"
+"  -h | --help        print this command line summary\n"
+"  -q | --quiet       no messages at all (default disabled)\n"
+"  -v | --verbose     print verbose messages (default disabled)\n"
+"  -f <percent>       fraction of fast buckets in percent (default %u%%)\n"
+"  -l <memory>        fast bucket memory limit in MB (default %u MB)\n"
+"  -w <watt>          assumed watt per core (default %u Watt)\n"
+"  -c <cents>         assumed cents per kWh (default %.2f cents)\n"
+"  --euro             assume '€' as currency sign (default)\n"
+"  --dollar           assume '$' as currencty sign\n"
+"  -<n>               bucket size (default 64)\n"
 "\n"
 
 "This tool is supposed to be given two arguments, a 'benchmarks' file and a\n"
@@ -27,16 +33,20 @@ static const char * usage =
 "in the given directory.  The tool then reads both files and tries to\n"
 "match names.  If this is successful it sorts the benchmarks according to\n"
 "the memory usage of that recorded run and time needed to solve them and\n"
-"puts them into buckets of the given size (default 64).  It then produces\n"
-"a new list of benchmarks ordered by the bucket assignment on 'stdout' (in\n"
-"the same format as the original benchmark file) and on 'stderr' reports\n"
-"expected maximum running time per bucket (if all jobs in that bucket /\n"
-"task are run in parallel) and the sum of the memory usage of those jobs.\n"
+"puts them into buckets of the given size (default 64).\n"
+"\n"
+"It then produces a new list of benchmarks ordered by the bucket assignment\n"
+"on 'stdout' (in the same format as the original benchmark file) and on\n"
+"'stderr' reports expected maximum running time per bucket (if all jobs in\n"
+"that bucket / task are run in parallel) and the sum of the memory usage\n"
+"of those jobs.\n"
 "\n"
 "The primary goal is to maximize memory usage per job / benchmark, while\n"
-"trying to stay a total limit of available per task (SLURM parlance) and\n"
-"the secondary goal is to minimize the maximum running time per bucket\n"
-"for a fast fraction (default half) of the buckets.\n"
+"trying to stay below a total limit of available cores per task (SLURM\n"
+"parlance).  The secondary goal is to minimize the maximum running time\n"
+"per bucket for a fast terminating fraction (default half) of the buckets.\n"
+"Ultimately our objective is to minimize the running cost in terms of\n"
+"power needed for the number of allocated cores.\n"
 
 ;
 
@@ -71,12 +81,14 @@ struct zummary {
   } limit;
   struct benchmark *benchmark;
   bool scheduled;
+  bool memory_limit_hit;
 };
 
 struct bucket {
   double real;
   double memory;
   size_t size;
+  size_t memory_limit_hit;
   struct zummary **zummaries;
 };
 
@@ -92,19 +104,28 @@ static size_t size_zummaries, capacity_zummaries;
 
 static struct benchmark *benchmarks;
 static size_t size_benchmarks, capacity_benchmarks;
+static int entries_per_benchmark_line;
 
 static const char *benchmarks_path;
 static char *missing_benchmarks_path;
 static const char *directory_path;
 static char *zummary_path;
+static double max_memory;
 
 static int verbosity;
+static unsigned fast_bucket_fraction;
+static unsigned fast_bucket_memory;
 static size_t bucket_size;
 static size_t last_bucket_size;
 static size_t tasks;
 
+static size_t max_memory_limit_hit;
 static struct bucket *buckets;
 static size_t scheduled;
+
+static bool use_euro_sign = true;
+static int watt_per_core = -1;
+static int cents_per_kwh = -1;
 
 static struct zummary *find_zummary(const char *name) {
   for (size_t i = 0; i != size_zummaries; i++)
@@ -209,7 +230,53 @@ static bool read_line(void) {
   return true;
 }
 
-static void parse_benchmark(struct benchmark *benchmark) {
+static void determine_entries_per_benchmark_line(void) {
+  assert(!entries_per_benchmark_line);
+  const char *p = line;
+  int spaces = 0;
+  char ch;
+  while ((ch = *p++))
+    if (ch == ' ')
+      spaces++;
+  if (!spaces)
+    die("expected at least one space in line %zu in '%s'", lineno, file_name);
+  else if (spaces > 2)
+    die("%d spaces in line %zu in '%s' (expected 2 or 3)", spaces, lineno,
+        file_name);
+  entries_per_benchmark_line = spaces + 1;
+  if (entries_per_benchmark_line == 2)
+    msg("assuming two entries per benchmark line");
+  else {
+    assert(entries_per_benchmark_line == 3);
+    msg("assuming three entries per benchmark line");
+  }
+}
+
+static void parse_benchmark2(struct benchmark *benchmark) {
+  char *p = line;
+  size_t number = 0;
+  if (!isdigit(*p))
+  EXPECTED_DIGIT:
+    die("expected digit in line %zu in '%s'", lineno, file_name);
+  char ch;
+  while ((ch = *p++) != ' ')
+    if (!isdigit(ch))
+      goto EXPECTED_DIGIT;
+    else
+      number = 10 * number + (ch - '0');
+  benchmark->number = number;
+  char *q = p;
+  while ((ch = *p))
+    if (ch == ' ')
+      die("unexpected second space in line %zu in '%s'", lineno, file_name);
+    else
+      p++;
+  benchmark->path = 0;
+  if (!(benchmark->name = strdup(q)))
+    out_of_memory("copying benchmark name");
+}
+
+static void parse_benchmark3(struct benchmark *benchmark) {
   char *p = line;
   size_t number = 0;
   if (!isdigit(*p))
@@ -233,6 +300,15 @@ static void parse_benchmark(struct benchmark *benchmark) {
     out_of_memory("copying benchmark path in");
   if (!(benchmark->name = strdup(p)))
     out_of_memory("copying benchmark name");
+}
+
+static void parse_benchmark(struct benchmark *benchmark) {
+  if (!entries_per_benchmark_line)
+    determine_entries_per_benchmark_line();
+  if (entries_per_benchmark_line == 2)
+    parse_benchmark2(benchmark);
+  else
+    parse_benchmark3(benchmark);
 }
 
 static void push_benchmark(struct benchmark *benchmark) {
@@ -259,6 +335,8 @@ static void parse_zummary(struct zummary *zummary) {
              &zummary->real, &zummary->memory, &zummary->limit.time,
              &zummary->limit.real, &zummary->limit.memory) != 7)
     die("invalid zummary line %zu in '%s'", lineno, file_name);
+  if (max_memory < zummary->memory)
+    max_memory = zummary->memory;
 }
 
 static void push_zummary(struct zummary *zummary) {
@@ -318,6 +396,13 @@ static void schedule_zummary(struct bucket *bucket, struct zummary *zummary) {
   if (bucket->real < zummary->real)
     bucket->real = zummary->real;
   bucket->memory += zummary->memory;
+  if (zummary->status == 2 || zummary->memory >= zummary->limit.memory) {
+    zummary->memory_limit_hit = true;
+    bucket->memory_limit_hit++;
+    if (max_memory_limit_hit < bucket->memory_limit_hit)
+      max_memory_limit_hit = bucket->memory_limit_hit;
+  } else
+    zummary->memory_limit_hit = false;
   zummary->scheduled = true;
   scheduled++;
 }
@@ -334,17 +419,55 @@ static size_t next_bucket(size_t j) {
   }
 }
 
+static double average(double a, double b) { return b ? a / b : a; }
+
+static double percent(double a, double b) { return average(100 * a, b); }
+
 int main(int argc, char **argv) {
   for (int i = 1; i != argc; i++) {
     const char *arg = argv[i];
     if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
-      printf(usage, FAST_BUCKET_FRACTION, FAST_BUCKET_MEMORY);
+      printf(usage, FAST_BUCKET_FRACTION, FAST_BUCKET_MEMORY, WATT_PER_CORE);
       fflush(stdout);
       return 0;
     } else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet"))
       verbosity = -1;
     else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose"))
       verbosity = 1;
+    else if (!strcmp(arg, "-f")) {
+      if (++i == argc)
+      ARGUMENT_MISSING:
+        die("argument to '%s' missing", arg);
+      int tmp = atoi(argv[i]);
+      if (tmp <= 0 || tmp > 100)
+      INVALID_ARGUMENT:
+        die("invalid argument in '%s %s'", arg, argv[i]);
+      fast_bucket_fraction = tmp;
+    } else if (!strcmp(arg, "-l")) {
+      if (++i == argc)
+        goto ARGUMENT_MISSING;
+      int tmp = atoi(argv[i]);
+      if (tmp < 0)
+        goto INVALID_ARGUMENT;
+      fast_bucket_memory = tmp;
+    } else if (!strcmp(arg, "-w")) {
+      if (++i == argc)
+        goto ARGUMENT_MISSING;
+      int tmp = atoi(argv[i]);
+      if (tmp < 0)
+        goto INVALID_ARGUMENT;
+      watt_per_core = tmp;
+    } else if (!strcmp(arg, "-c")) {
+      if (++i == argc)
+        goto ARGUMENT_MISSING;
+      int tmp = atoi(argv[i]);
+      if (tmp < 0)
+        goto INVALID_ARGUMENT;
+      cents_per_kwh = tmp;
+    } else if (!strcmp(arg, "--euro"))
+      use_euro_sign = true;
+    else if (!strcmp(arg, "--dollar"))
+      use_euro_sign = false;
     else if (arg[0] == '-' && isdigit(arg[1])) {
       bucket_size = arg[1] - '0';
       const size_t max_size_t = ~(size_t)0;
@@ -451,6 +574,31 @@ int main(int argc, char **argv) {
     bucket_size = 64;
     msg("using default bucket size %zu", bucket_size);
   }
+  if (fast_bucket_fraction)
+    msg("using specified fast bucket fraction %u%%", fast_bucket_fraction);
+  else {
+    fast_bucket_fraction = FAST_BUCKET_FRACTION;
+    msg("using default fast bucket fraction %u%%", fast_bucket_fraction);
+  }
+  if (fast_bucket_memory)
+    msg("using specified fast bucket memory limit of %u MB",
+        fast_bucket_memory);
+  else {
+    fast_bucket_memory = FAST_BUCKET_MEMORY;
+    msg("using default fast bucket memory limit of %u MB", fast_bucket_memory);
+  }
+  if (watt_per_core >= 0)
+    msg("using specified %d Watt per core", watt_per_core);
+  else {
+    watt_per_core = WATT_PER_CORE;
+    msg("using default %d Watt per core", watt_per_core);
+  }
+  if (cents_per_kwh >= 0)
+    msg ("using specified %d cents per kWh", cents_per_kwh);
+  else {
+    cents_per_kwh = CENTS_PER_KWH;
+    msg ("using default %d cents per kWh", cents_per_kwh);
+  }
   tasks = size_benchmarks / bucket_size;
   if (tasks * bucket_size == size_benchmarks) {
     msg("need exactly %zu tasks "
@@ -472,18 +620,18 @@ int main(int argc, char **argv) {
               malloc(bucket_size * sizeof *buckets[i].zummaries)))
       out_of_memory("allocating bucket");
   sort_zummaries_by_time();
-  size_t j = 0;
+  size_t j = 0, limit = (fast_bucket_fraction * tasks) / 100u;
   for (size_t i = 0; i != size_zummaries; i++) {
     struct zummary *zummary = zummaries + i;
     if (zummary->status != 10 && zummary->status != 20)
       continue;
-    if (zummary->memory > 8000)
+    if (zummary->memory > fast_bucket_memory)
       continue;
     assert(!zummary->scheduled);
     struct bucket *bucket = buckets + j;
     schedule_zummary(bucket, zummary);
     zummary->scheduled = true;
-    if (buckets[j].size >= bucket_size && ++j == (tasks + 0) / 2)
+    if (buckets[j].size >= bucket_size && ++j == limit)
       break;
   }
   sort_zummaries_by_memory();
@@ -502,20 +650,45 @@ int main(int argc, char **argv) {
       break;
   }
   size_t printed = 0;
+  double sum_real = 0;
+  double max_total_memory = 0;
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
-    msg("task[%zu] maximum-time %.2f, total-memory %.2f", i + 1, bucket->real,
-        bucket->memory);
+    msg("task[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1,
+        bucket->real, bucket->memory);
+    if (bucket->memory > max_total_memory)
+      max_total_memory = bucket->memory;
+    sum_real += bucket->real;
     for (size_t j = 0; j != bucket->size; j++) {
       struct zummary *zummary = bucket->zummaries[j];
       struct benchmark *benchmark = zummary->benchmark;
       assert(zummary->scheduled);
       assert(benchmark);
-      vrb("  %.2f %.2f %s", zummary->real, zummary->memory, zummary->name);
-      printf("%zu %s %s\n", ++printed, benchmark->path, zummary->name);
+      vrb("  %.2f %.2f %s%s", zummary->real, zummary->memory, zummary->name,
+          zummary->memory_limit_hit ? " *" : "");
+      printf("%zu", ++printed);
+      if (benchmark->path)
+        fputc(' ', stdout), fputs(benchmark->path, stdout);
+      fputc(' ', stdout), fputs(zummary->name, stdout);
+      fputc('\n', stdout);
     }
   }
   fflush(stdout);
+  msg("maximum total-memory per bucket %.0f MB", max_total_memory);
+  msg("maximum memory per benchmark %.0f MB %.0f%%", max_memory,
+      percent(max_memory, max_total_memory));
+  msg("maximum memory limit hit per bucket %zu", max_memory_limit_hit);
+  msg("sum of maximum running times per bucket %.0f", sum_real);
+  double core_seconds = bucket_size * sum_real;
+  double core_hours = core_seconds / 3600;
+  msg("allocated core time of %.2f core hours (%.0f = %zu * %.0f sec)",
+      core_hours, core_seconds, bucket_size, sum_real);
+  double power_usage = core_hours * watt_per_core / 1000.0;
+  msg("power usage of %.3f kWh (%u W * %.2fh / 1000)", power_usage, watt_per_core,
+      core_hours);
+  double costs = cents_per_kwh * power_usage / 100.0;
+  msg("costs %s %.2f (¢ %d * %.3f kWh / 100)", use_euro_sign ? "€" : "$",
+      costs, cents_per_kwh, power_usage);
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
   free(buckets);
