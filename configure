@@ -1,0 +1,56 @@
+#!/bin/sh
+usage () {
+cat <<EOF
+usage: configure [ <option> ]
+
+where '<option>' is one of the following
+
+-h | --help         print this command line option summary
+-d | --debug | -g   configure for debugging
+EOF
+}
+die () {
+  echo "configure: error: $*" 1>&2
+  exit 1
+}
+msg () {
+  echo "[configure] $*"
+}
+debug=no
+while [ $# -gt 0 ]
+do
+  case $1 in
+    -h|--help) usage; exit 0;;
+    -d|--debug|-g) debug=yes;;
+    *) die "invalid option '$1' (try '-h')";;
+  esac
+  shift
+done
+VERSION=`cat VERSION 2>/dev/null`
+[ x"$VERSION" = x ] && die "could not get 'VERSION'"
+msg "version $VERSION"
+IDENTIFIER="`git rev-parse HEAD 2>/dev/null`"
+[ x"$IDENTIFIER" = x ] || msg "identifier '$IDENTIFIER'"
+COMPILE="gcc -Wall"
+if [ $debug = yes ]
+then
+  COMPILE="$COMPILE -g"
+else
+  COMPILE="$COMPILE -O3 -DNDEBUG"
+fi
+msg "compiling with '$COMPILE'"
+cat<<EOF > config.h
+#define COMPILE "$COMPILE"
+#define IDENTIFIER "$IDENTIFIER"
+#define VERSION "$VERSION"
+EOF
+msg "generated 'config.h'"
+cat<<EOF > makefile
+all: zort
+zort: zort.c config.h makefile
+	$COMPILE -o \$@ $<
+clean:
+	rm -f zort config.h makefile
+.PHONY: all clean
+EOF
+msg "generated 'makefile' (run 'make')"

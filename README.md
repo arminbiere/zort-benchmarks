@@ -4,7 +4,7 @@ Zort-Benchmarks
 Building
 --------
 
-To compile use `make`.
+To compile use `./configure && make` (see `./configure -h` for options).
 
 Usage
 -----

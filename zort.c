@@ -61,6 +61,8 @@ static const char * usage =
 
 // clang-format on
 
+#include "config.h"
+
 #include <assert.h>
 #include <ctype.h>
 #include <fcntl.h>
@@ -566,6 +568,12 @@ int main(int argc, char **argv) {
              directory_path, "benchmarks");
     benchmarks_path = missing_benchmarks_path;
   }
+  if (benchmarks_path && directory_path &&
+      directory_exists (benchmarks_path) && file_exists (directory_path)) {
+    const char * tmp = benchmarks_path;
+    benchmarks_path = directory_path;
+    directory_path = tmp;
+  }
   if (!file_exists(benchmarks_path))
     die("benchmarks file '%s' does not exist", benchmarks_path);
   FILE *benchmarks_file = fopen(benchmarks_path, "r");
@@ -583,6 +591,15 @@ int main(int argc, char **argv) {
   FILE *zummary_file = fopen(zummary_path, "r");
   if (!zummary_file)
     die("could not open and read '%s'", zummary_path);
+  if (verbosity >= 0) {
+    printf ("Zort Benchmark Sorting\n");
+    printf ("Copyright (c) 2025 Armin Biere, University of Freiburg\n");
+    printf ("Version %s", VERSION);
+    if (IDENTIFIER && *IDENTIFIER)
+      printf (" %s", IDENTIFIER);
+    fputc ('\n', stdout);
+    printf ("Compiled %s\n", COMPILE);
+  }
   init_line_reading(benchmarks_file, benchmarks_path);
   while (read_line()) {
     struct benchmark benchmark;
