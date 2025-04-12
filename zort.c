@@ -10,16 +10,18 @@ static const char * usage =
 "\n"
 "where '<option>' is one of the following:\n"
 "\n"
-"  -h | --help        print this command line summary\n"
-"  -q | --quiet       no messages at all (default disabled)\n"
-"  -v | --verbose     print verbose messages (default disabled)\n"
-"  -f <percent>       fraction of fast buckets in percent (default %u%%)\n"
-"  -l <memory>        fast bucket memory limit in MB (default %u MB)\n"
-"  -w <watt>          assumed watt per core (default %u Watt)\n"
-"  -c <cents>         assumed cents per kWh (default %.2f cents)\n"
-"  --euro             assume '€' as currency sign (default)\n"
-"  --dollar           assume '$' as currencty sign\n"
-"  -<n>               bucket size (default 64)\n"
+"  -h | --help         print this command line summary\n"
+"  -q | --quiet        no messages at all (default disabled)\n"
+"  -v | --verbose      print verbose messages (default disabled)\n"
+"  -k | --keep         keep benchmark order (but compute and print costs)\n"
+"  -n | --no-printing  do not print benchmarks (only compute and print costs)\n"
+"  -f <percent>        fraction of fast buckets in percent (default %u%%)\n"
+"  -l <memory>         fast bucket memory limit in MB (default %u MB)\n"
+"  -w <watt>           assumed watt per core (default %u Watt)\n"
+"  -c <cents>          assumed cents per kWh (default %.2f cents)\n"
+"  --euro              assume '€' as currency sign (default)\n"
+"  --dollar            assume '$' as currencty sign\n"
+"  -<n>                bucket size (default 64)\n"
 "\n"
 
 "This tool is supposed to be given two arguments, a 'benchmarks' file and a\n"
@@ -112,6 +114,8 @@ static const char *directory_path;
 static char *zummary_path;
 static double max_memory;
 
+static bool keep;
+static bool print = true;
 static int verbosity;
 static unsigned fast_bucket_fraction;
 static unsigned fast_bucket_memory;
@@ -434,6 +438,11 @@ int main(int argc, char **argv) {
       verbosity = -1;
     else if (!strcmp(arg, "-v") || !strcmp(arg, "--verbose"))
       verbosity = 1;
+    else if (!strcmp(arg, "-k") || !strcmp(arg, "--keep"))
+      keep = true;
+    else if (!strcmp(arg, "-n") || !strcmp(arg, "--no-print") ||
+             !strcmp(arg, "--no-printing"))
+      print = false;
     else if (!strcmp(arg, "-f")) {
       if (++i == argc)
       ARGUMENT_MISSING:
@@ -594,10 +603,10 @@ int main(int argc, char **argv) {
     msg("using default %d Watt per core", watt_per_core);
   }
   if (cents_per_kwh >= 0)
-    msg ("using specified %d cents per kWh", cents_per_kwh);
+    msg("using specified %d cents per kWh", cents_per_kwh);
   else {
     cents_per_kwh = CENTS_PER_KWH;
-    msg ("using default %d cents per kWh", cents_per_kwh);
+    msg("using default %d cents per kWh", cents_per_kwh);
   }
   tasks = size_benchmarks / bucket_size;
   if (tasks * bucket_size == size_benchmarks) {
@@ -619,35 +628,47 @@ int main(int argc, char **argv) {
     if (!(buckets[i].zummaries =
               malloc(bucket_size * sizeof *buckets[i].zummaries)))
       out_of_memory("allocating bucket");
-  sort_zummaries_by_time();
-  size_t j = 0, limit = (fast_bucket_fraction * tasks) / 100u;
-  for (size_t i = 0; i != size_zummaries; i++) {
-    struct zummary *zummary = zummaries + i;
-    if (zummary->status != 10 && zummary->status != 20)
-      continue;
-    if (zummary->memory > fast_bucket_memory)
-      continue;
-    assert(!zummary->scheduled);
-    struct bucket *bucket = buckets + j;
-    schedule_zummary(bucket, zummary);
-    zummary->scheduled = true;
-    if (buckets[j].size >= bucket_size && ++j == limit)
-      break;
-  }
-  sort_zummaries_by_memory();
-  size_t last = size_zummaries;
-  j = tasks - 1;
-  for (;;) {
-    struct zummary *zummary = zummaries + --last;
-    if (zummary->scheduled)
-      continue;
-    struct bucket *bucket = buckets + j;
-    schedule_zummary(bucket, zummary);
-    zummary->scheduled = true;
-    if (scheduled != size_zummaries)
-      j = next_bucket(j);
-    else
-      break;
+  if (keep) {
+    for (size_t i = 0, j = 0; i != size_zummaries; i++) {
+      struct zummary *zummary = zummaries + i;
+      assert(!zummary->scheduled);
+      struct bucket *bucket = buckets + j;
+      schedule_zummary(bucket, zummary);
+      zummary->scheduled = true;
+      if (buckets[j].size >= bucket_size)
+	j++;
+    }
+  } else {
+    sort_zummaries_by_time();
+    size_t j = 0, limit = (fast_bucket_fraction * tasks) / 100u;
+    for (size_t i = 0; i != size_zummaries; i++) {
+      struct zummary *zummary = zummaries + i;
+      if (zummary->status != 10 && zummary->status != 20)
+        continue;
+      if (zummary->memory > fast_bucket_memory)
+        continue;
+      assert(!zummary->scheduled);
+      struct bucket *bucket = buckets + j;
+      schedule_zummary(bucket, zummary);
+      zummary->scheduled = true;
+      if (buckets[j].size >= bucket_size && ++j == limit)
+        break;
+    }
+    sort_zummaries_by_memory();
+    size_t last = size_zummaries;
+    j = tasks - 1;
+    for (;;) {
+      struct zummary *zummary = zummaries + --last;
+      if (zummary->scheduled)
+        continue;
+      struct bucket *bucket = buckets + j;
+      schedule_zummary(bucket, zummary);
+      zummary->scheduled = true;
+      if (scheduled != size_zummaries)
+        j = next_bucket(j);
+      else
+        break;
+    }
   }
   size_t printed = 0;
   double sum_real = 0;
@@ -666,6 +687,8 @@ int main(int argc, char **argv) {
       assert(benchmark);
       vrb("  %.2f %.2f %s%s", zummary->real, zummary->memory, zummary->name,
           zummary->memory_limit_hit ? " *" : "");
+      if (!print)
+        continue;
       printf("%zu", ++printed);
       if (benchmark->path)
         fputc(' ', stdout), fputs(benchmark->path, stdout);
@@ -684,11 +707,11 @@ int main(int argc, char **argv) {
   msg("allocated core time of %.2f core hours (%.0f = %zu * %.0f sec)",
       core_hours, core_seconds, bucket_size, sum_real);
   double power_usage = core_hours * watt_per_core / 1000.0;
-  msg("power usage of %.3f kWh (%u W * %.2fh / 1000)", power_usage, watt_per_core,
-      core_hours);
+  msg("power usage of %.3f kWh (%u W * %.2fh / 1000)", power_usage,
+      watt_per_core, core_hours);
   double costs = cents_per_kwh * power_usage / 100.0;
-  msg("costs %s %.2f (¢ %d * %.3f kWh / 100)", use_euro_sign ? "€" : "$",
-      costs, cents_per_kwh, power_usage);
+  msg("costs %s %.2f (¢ %d * %.3f kWh / 100)", use_euro_sign ? "€" : "$", costs,
+      cents_per_kwh, power_usage);
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
   free(buckets);
