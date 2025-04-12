@@ -27,7 +27,7 @@ static const char * usage =
 "in the given directory.  The tool then reads both files and tries to\n"
 "match names.  If this is successful it sorts the benchmarks according to\n"
 "the memory usage of that recorded run and time needed to solve them and\n"
-"puts them into buckets of the given size (default 64).  " It then produces\n"
+"puts them into buckets of the given size (default 64).  It then produces\n"
 "a new list of benchmarks ordered by the bucket assignment on 'stdout' (in\n"
 "the same format as the original benchmark file) and on 'stderr' reports\n"
 "expected maximum running time per bucket (if all jobs in that bucket /\n"
