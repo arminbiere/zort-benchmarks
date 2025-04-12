@@ -592,13 +592,15 @@ int main(int argc, char **argv) {
   if (!zummary_file)
     die("could not open and read '%s'", zummary_path);
   if (verbosity >= 0) {
-    printf ("Zort Benchmark Sorting\n");
-    printf ("Copyright (c) 2025 Armin Biere, University of Freiburg\n");
-    printf ("Version %s", VERSION);
+    FILE * message_file = generate ? stderr : stdout;
+    fprintf (message_file, "Zort Benchmark Sorting\n");
+    fprintf (message_file, "Copyright (c) 2025 Armin Biere, University of Freiburg\n");
+    fprintf (message_file, "Version %s", VERSION);
     if (IDENTIFIER && *IDENTIFIER)
-      printf (" %s", IDENTIFIER);
-    fputc ('\n', stdout);
-    printf ("Compiled %s\n", COMPILE);
+      fprintf (message_file, " %s", IDENTIFIER);
+    fputc ('\n', message_file);
+    fprintf (message_file, "Compiled %s\n", COMPILE);
+    fflush (message_file);
   }
   init_line_reading(benchmarks_file, benchmarks_path);
   while (read_line()) {
