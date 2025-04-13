@@ -26,7 +26,7 @@ static const char * usage =
 "  -w <watt>           assumed Watt per core (default %d Watt)\n"
 "  -c <cents>          assumed cents per kWh (default %d cents)\n"
 "  --euro              assume '€' as currency sign (default)\n"
-"  --dollar            assume '$' as currencty sign\n"
+"  --dollar            assume '$' as currency sign\n"
 "\n"
 
 "This tool is supposed to be given two arguments, a 'benchmarks' file and a\n"
@@ -830,8 +830,9 @@ int main(int argc, char **argv) {
     double end = start + next->real;
     next->start = start;
     next->end = end;
-    vrb(1, "running bucket[%zu] after %.0f seconds", i + 1, next->start);
     assert(pos != invalid_position);
+    vrb(1, "running bucket[%zu] at node %zu after %.0f seconds (%.0f..%.0f)", i + 1, 
+            pos, next->start, next->start, next->end);
     nodes[pos] = next;
     if (end > latency)
       latency = end;
