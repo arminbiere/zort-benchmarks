@@ -867,7 +867,7 @@ int main(int argc, char **argv) {
   msg("maximum benchmark-memory %.0f MB (%.0f%% maximum bucket-memory)",
       max_memory, percent(max_memory, max_total_memory));
   if (verbosity > 0 || max_memory_limit_hit)
-    msg("maximum of %zu times memory-limit exceeded in one bucket",
+    msg("maximum of %zu times memory-limit exceeded within one bucket",
         max_memory_limit_hit);
   vrb(1, "sum of maximum running times per bucket %.0f s", sum_real);
   double core_seconds = bucket_size * sum_real;
