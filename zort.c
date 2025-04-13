@@ -18,6 +18,7 @@ static const char * usage =
 "  -v | --verbose      print verbose messages (default disabled)\n"
 "  -k | --keep         keep benchmark order (but compute and print costs)\n"
 "  -g | --generate     generate and print new benchmarks order\n"
+"  -o <output>         set output (otherwise 'stdout', implies '-g')\n"
 "  -b <cores>          cores per bucket aka bucket-size (default %d)\n"
 "  -f <percent>        fraction of fast buckets in percent (default %d%%)\n"
 "  -l <memory>         fast bucket memory limit in MB (default %d MB)\n"
@@ -134,6 +135,10 @@ static double max_memory;
 static bool keep;
 static int verbosity;
 static bool generate;
+
+static bool close_output_file;
+static FILE *output_file;
+
 static unsigned fast_bucket_fraction;
 static unsigned fast_bucket_memory;
 static size_t bucket_size;
@@ -181,38 +186,37 @@ static void die(const char *fmt, ...) {
   exit(1);
 }
 
+static void flush_generated_output(void) {
+  if (generate && !output_file)
+    fflush(stdout);
+}
+
+static FILE *message_file(void) {
+  return (generate && !output_file) ? stderr : stdout;
+}
+
 static void msg(const char *fmt, ...) {
   if (verbosity < 0)
     return;
-  FILE *message_file;
-  if (generate) {
-    fflush(stdout);
-    message_file = stderr;
-  } else
-    message_file = stdout;
+  flush_generated_output();
   va_list ap;
   va_start(ap, fmt);
-  vfprintf(message_file, fmt, ap);
+  vfprintf(message_file(), fmt, ap);
   va_end(ap);
-  fputc('\n', message_file);
-  fflush(message_file);
+  fputc('\n', message_file());
+  fflush(message_file());
 }
 
 static void vrb(int level, const char *fmt, ...) {
   if (verbosity < level)
     return;
-  FILE *message_file;
-  if (generate) {
-    fflush(stdout);
-    message_file = stderr;
-  } else
-    message_file = stdout;
+  flush_generated_output();
   va_list ap;
   va_start(ap, fmt);
-  vfprintf(message_file, fmt, ap);
+  vfprintf(message_file(), fmt, ap);
   va_end(ap);
-  fputc('\n', message_file);
-  fflush(message_file);
+  fputc('\n', message_file());
+  fflush(message_file());
 }
 
 static void out_of_memory(const char *what) { die("out-of-memory %s", what); }
@@ -474,6 +478,8 @@ static double percent(double a, double b) { return average(100 * a, b); }
 int main(int argc, char **argv) {
   const char *quiet_options = 0;
   const char *verbose_option = 0;
+  const char *generate_option = 0;
+  const char *output_path = 0;
   for (int i = 1; i != argc; i++) {
     const char *arg = argv[i];
     if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
@@ -495,12 +501,28 @@ int main(int argc, char **argv) {
       verbosity++;
     } else if (!strcmp(arg, "-k") || !strcmp(arg, "--keep"))
       keep = true;
-    else if (!strcmp(arg, "-g") || !strcmp(arg, "--generate"))
+    else if (!strcmp(arg, "-g") || !strcmp(arg, "--generate")) {
+      if (generate_option)
+        die("two generate options '%s' and '%s'", generate_option, arg);
+      if (output_path)
+        die("generate option '%s' after setting output path with '-o %s'", arg,
+            output_path);
+      generate_option = arg;
       generate = true;
-    else if (!strcmp(arg, "-b")) {
+    } else if (!strcmp(arg, "-o")) {
       if (++i == argc)
       ARGUMENT_MISSING:
         die("argument to '%s' missing", arg);
+      if (output_path)
+        die("two output paths specified '-o %s' and '-o %s'", output_path, arg);
+      if (generate_option)
+        die("output path set '-o %s' after generate option '%s'", arg,
+            generate_option);
+      output_path = arg;
+      generate = true;
+    } else if (!strcmp(arg, "-b")) {
+      if (++i == argc)
+        goto ARGUMENT_MISSING;
       int tmp = atoi(argv[i]);
       if (tmp <= 0)
       INVALID_ARGUMENT:
@@ -571,23 +593,27 @@ int main(int argc, char **argv) {
     if (!directory_exists(directory_path))
     DIRECTORY_DOES_NOT_EXISTS:
       die("directory '%s' does not exist", directory_path);
-    size_t missing_benchmarks_path_len =
-        strlen(directory_path) + strlen("benchmarks") + 2;
+    size_t directory_path_len = strlen(directory_path);
+    size_t missing_benchmarks_path_len = directory_path_len + 16;
     missing_benchmarks_path = malloc(missing_benchmarks_path_len);
     if (!missing_benchmarks_path)
       out_of_memory("allocating missing benchmarks paths");
-    snprintf(missing_benchmarks_path, missing_benchmarks_path_len, "%s/%s",
-             directory_path, "benchmarks");
+    strcpy(missing_benchmarks_path, directory_path);
+    if (directory_path_len && directory_path[directory_path_len - 1] != '/')
+      missing_benchmarks_path[directory_path_len] = '/';
+    strcpy(missing_benchmarks_path + directory_path_len, "benchmarks");
     benchmarks_path = missing_benchmarks_path;
   }
-  if (benchmarks_path && directory_path &&
-      directory_exists (benchmarks_path) && file_exists (directory_path)) {
-    const char * tmp = benchmarks_path;
+  if (benchmarks_path && directory_path && directory_exists(benchmarks_path) &&
+      file_exists(directory_path)) {
+    const char *tmp = benchmarks_path;
     benchmarks_path = directory_path;
     directory_path = tmp;
   }
   if (!file_exists(benchmarks_path))
     die("benchmarks file '%s' does not exist", benchmarks_path);
+  if (benchmarks_path && output_path && !strcmp(benchmarks_path, output_path))
+    die("identicial benchmarks and output path '%s'", benchmarks_path);
   FILE *benchmarks_file = fopen(benchmarks_path, "r");
   if (!benchmarks_file)
     die("could not open and read '%s'", benchmarks_path);
@@ -604,15 +630,16 @@ int main(int argc, char **argv) {
   if (!zummary_file)
     die("could not open and read '%s'", zummary_path);
   if (verbosity >= 0) {
-    FILE * message_file = generate ? stderr : stdout;
-    fprintf (message_file, "Zort Benchmark Sorting\n");
-    fprintf (message_file, "Copyright (c) 2025 Armin Biere, University of Freiburg\n");
-    fprintf (message_file, "Version %s", VERSION);
+    FILE *message_file = generate ? stderr : stdout;
+    fprintf(message_file, "Zort Benchmark Sorting\n");
+    fprintf(message_file,
+            "Copyright (c) 2025 Armin Biere, University of Freiburg\n");
+    fprintf(message_file, "Version %s", VERSION);
     if (IDENTIFIER && *IDENTIFIER)
-      fprintf (message_file, " %s", IDENTIFIER);
-    fputc ('\n', message_file);
-    fprintf (message_file, "Compiled %s\n", COMPILE);
-    fflush (message_file);
+      fprintf(message_file, " %s", IDENTIFIER);
+    fputc('\n', message_file);
+    fprintf(message_file, "Compiled %s\n", COMPILE);
+    fflush(message_file);
   }
   init_line_reading(benchmarks_file, benchmarks_path);
   while (read_line()) {
@@ -721,11 +748,11 @@ int main(int argc, char **argv) {
       out_of_memory("allocating bucket");
   if (keep) {
     for (size_t i = 0, j = 0; i != size_benchmarks; i++) {
-      struct benchmark * benchmark = benchmarks + i;
+      struct benchmark *benchmark = benchmarks + i;
       struct zummary *zummary = benchmark->zummary;
-      assert (zummary);
+      assert(zummary);
       assert(!zummary->scheduled);
-      assert (zummary->benchmark == benchmark);
+      assert(zummary->benchmark == benchmark);
       struct bucket *bucket = buckets + j;
       schedule_zummary(bucket, zummary);
       if (buckets[j].size >= bucket_size)
@@ -766,6 +793,20 @@ int main(int argc, char **argv) {
   size_t printed = 0;
   double sum_real = 0;
   double max_total_memory = 0;
+  if (generate) {
+    if (output_path) {
+      output_file = fopen(output_path, "w");
+      if (!output_file)
+        die("could not open and write output file '%s'", output_path);
+      msg("writing new benchmark file to '%s'", output_path);
+      close_output_file = true;
+    } else {
+      msg("writing new benchmark file to '<stdout>'");
+      output_file = stdout;
+      assert(!close_output_file);
+    }
+  } else
+    assert(!output_file);
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
     vrb(1, "bucket[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1,
@@ -778,32 +819,40 @@ int main(int argc, char **argv) {
       struct benchmark *benchmark = zummary->benchmark;
       assert(zummary->scheduled);
       assert(benchmark);
-      vrb(2, "  %.2f %.2f %s%s", zummary->real, zummary->memory, zummary->name,
+      vrb(2, "%9.0f sec %6.0f MB  %s%s", zummary->real, zummary->memory, zummary->name,
           zummary->memory_limit_hit ? " *" : "");
       if (!generate)
         continue;
-      printf("%zu", ++printed);
+      fprintf(output_file, "%zu", ++printed);
       if (benchmark->path)
-        fputc(' ', stdout), fputs(benchmark->path, stdout);
-      fputc(' ', stdout), fputs(zummary->name, stdout);
-      fputc('\n', stdout);
+        fputc(' ', output_file), fputs(benchmark->path, output_file);
+      fputc(' ', output_file), fputs(zummary->name, output_file);
+      fputc('\n', output_file);
     }
   }
-  fflush(stdout);
-  msg("maximum bucket-memory %.0f MB (%.0f%% of %zu MB available)", 
-      max_total_memory, percent (max_total_memory, size_memory), size_memory);
+  if (output_file) {
+    fflush(output_file);
+    if (close_output_file)
+      fclose(output_file);
+  }
+  msg("maximum bucket-memory %.0f MB (%.0f%% of %zu MB available)",
+      max_total_memory, percent(max_total_memory, size_memory), size_memory);
   msg("maximum benchmark-memory %.0f MB (%.0f%% maximum bucket-memory)",
       max_memory, percent(max_memory, max_total_memory));
   if (verbosity > 0 || max_memory_limit_hit)
-    msg("maximum of %zu times memory-limit exceeded in one bucket", max_memory_limit_hit);
+    msg("maximum of %zu times memory-limit exceeded in one bucket",
+        max_memory_limit_hit);
   vrb(1, "sum of maximum running times per bucket %.0f seconds", sum_real);
   double core_seconds = bucket_size * sum_real;
   double core_hours = core_seconds / 3600;
   msg("allocated core-time of %.2f core-hours (%.0f = %zu * %.0f sec)",
       core_hours, core_seconds, bucket_size, sum_real);
   double power_usage = core_hours * watt_per_core / 1000.0;
-  msg("power usage of %.3f kWh (%u W * %.2f h / 1000)", power_usage,
+  msg("power-usage of %.3f kWh (%u W * %.2f h / 1000)", power_usage,
       watt_per_core, core_hours);
+  double costs = cents_per_kwh * power_usage / 100.0;
+  msg("estimated-costs of %s %.2f (¢ %d * %.3f kWh / 100)",
+      use_euro_sign ? "€" : "$", costs, cents_per_kwh, power_usage);
   sort_buckets_by_real();
   nodes = calloc(size_nodes, sizeof *nodes);
   if (!nodes)
@@ -831,17 +880,14 @@ int main(int argc, char **argv) {
     next->start = start;
     next->end = end;
     assert(pos != invalid_position);
-    vrb(1, "running bucket[%zu] at node %zu after %.0f seconds (%.0f..%.0f)", i + 1, 
-            pos, next->start, next->start, next->end);
+    vrb(1, "running bucket[%zu] at node %zu after %.0f seconds (%.0f-%.0f)",
+        i + 1, pos, next->start, next->start, next->end);
     nodes[pos] = next;
     if (end > latency)
       latency = end;
   }
-  msg("latency of %.0f seconds (%.2f h running %zu nodes in parallel)",
-      latency, latency / 2600, size_nodes);
-  double costs = cents_per_kwh * power_usage / 100.0;
-  msg("costs %s %.2f (¢ %d * %.3f kWh / 100)", use_euro_sign ? "€" : "$", costs,
-      cents_per_kwh, power_usage);
+  msg("latency of %.0f seconds (%.2f h running %zu nodes in parallel)", latency,
+      latency / 2600, size_nodes);
   free(nodes);
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
