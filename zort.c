@@ -34,7 +34,7 @@ static const char * usage =
 "'directory', where 'benchmarks' is a file which has three fields per line\n"
 "separated by spaces. The first gives the benchmark order the second gives\n"
 "the path to the benchmark and the third a unique name of the benchmark.\n"
-"If only two entries are give per line in 'benchmarks' we assume the path\n"
+"If only two entries are given per line in 'benchmarks' we assume the path\n"
 "was ommitted.  The 'directory' is supposed to contain a 'zummary' file\n"
 "produced by the 'zummarize' tool (which is meant to parse 'runlim' output).\n"
 "\n"
@@ -307,6 +307,11 @@ static void parse_benchmark2(struct benchmark *benchmark) {
     else
       number = 10 * number + (ch - '0');
   benchmark->number = number;
+  for (size_t i = 0; i != size_benchmarks; i++)
+    if (benchmarks[i].number == number)
+      die("benchmark number %zu at line %zu in '%s' "
+          "already used at line %zu",
+          number, size_benchmarks + 1, file_name, i + 1);
   char *q = p;
   while ((ch = *p))
     if (ch == ' ')
@@ -323,7 +328,7 @@ static void parse_benchmark3(struct benchmark *benchmark) {
   size_t number = 0;
   if (!isdigit(*p))
   EXPECTED_DIGIT:
-    die("expected digit in line %zu '%s'", lineno, file_name);
+    die("expected digit in line %zu in '%s'", lineno, file_name);
   char ch;
   while ((ch = *p++) != ' ')
     if (!isdigit(ch))
@@ -331,6 +336,11 @@ static void parse_benchmark3(struct benchmark *benchmark) {
     else
       number = 10 * number + (ch - '0');
   benchmark->number = number;
+  for (size_t i = 0; i != size_benchmarks; i++)
+    if (benchmarks[i].number == number)
+      die("benchmark number %zu at line %zu in '%s' "
+          "already used at line %zu",
+          number, size_benchmarks + 1, file_name, i + 1);
   char *q = p;
   while ((ch = *p) != ' ')
     if (!ch)
@@ -648,7 +658,7 @@ int main(int argc, char **argv) {
     die("could not open and read '%s'", zummary_path);
   if (verbosity >= 0) {
     FILE *message_file = generate ? stderr : stdout;
-    fprintf(message_file, "Zort Benchmark Sorting\n");
+    fprintf(message_file, "Zort Benchmarks Sorting\n");
     fprintf(message_file,
             "Copyright (c) 2025 Armin Biere, University of Freiburg\n");
     fprintf(message_file, "Version %s", VERSION);
