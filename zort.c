@@ -128,6 +128,7 @@ static int entries_per_benchmark_line;
 
 static const char *benchmarks_path;
 static char *missing_benchmarks_path;
+static char *simplified_directory_path;
 static const char *directory_path;
 static char *zummary_path;
 static double max_memory;
@@ -136,6 +137,7 @@ static bool keep;
 static int verbosity;
 static bool generate;
 
+static const char *output_path;
 static bool close_output_file;
 static FILE *output_file;
 
@@ -187,12 +189,12 @@ static void die(const char *fmt, ...) {
 }
 
 static void flush_generated_output(void) {
-  if (generate && !output_file)
+  if (generate && !output_path)
     fflush(stdout);
 }
 
 static FILE *message_file(void) {
-  return (generate && !output_file) ? stderr : stdout;
+  return (generate && !output_path) ? stderr : stdout;
 }
 
 static void msg(const char *fmt, ...) {
@@ -471,6 +473,21 @@ static size_t next_bucket(size_t j) {
   }
 }
 
+static const char *simplify_directory_path(const char *directory_path) {
+  size_t len = strlen(directory_path);
+  if (!len || directory_path[len - 1] != '/')
+    return directory_path;
+  simplified_directory_path = malloc(len + 1);
+  if (!simplified_directory_path)
+    out_of_memory("allocating simplified directory path");
+  strcpy(simplified_directory_path, directory_path);
+  char *p = simplified_directory_path + len - 1;
+  while (p != simplified_directory_path && *p == '/')
+    p--;
+  p[1] = 0;
+  return simplified_directory_path;
+}
+
 static double average(double a, double b) { return b ? a / b : a; }
 
 static double percent(double a, double b) { return average(100 * a, b); }
@@ -479,7 +496,6 @@ int main(int argc, char **argv) {
   const char *quiet_options = 0;
   const char *verbose_option = 0;
   const char *generate_option = 0;
-  const char *output_path = 0;
   for (int i = 1; i != argc; i++) {
     const char *arg = argv[i];
     if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
@@ -518,7 +534,7 @@ int main(int argc, char **argv) {
       if (generate_option)
         die("output path set '-o %s' after generate option '%s'", arg,
             generate_option);
-      output_path = arg;
+      output_path = argv[i];
       generate = true;
     } else if (!strcmp(arg, "-b")) {
       if (++i == argc)
@@ -588,8 +604,10 @@ int main(int argc, char **argv) {
     assert(!directory_path);
     die("benchmark and directory path missing (try '-h')");
   }
-  if (!directory_path) {
-    directory_path = benchmarks_path;
+  if (directory_path)
+    directory_path = simplify_directory_path(directory_path);
+  else {
+    directory_path = simplify_directory_path(benchmarks_path);
     if (!directory_exists(directory_path))
     DIRECTORY_DOES_NOT_EXISTS:
       die("directory '%s' does not exist", directory_path);
@@ -599,9 +617,8 @@ int main(int argc, char **argv) {
     if (!missing_benchmarks_path)
       out_of_memory("allocating missing benchmarks paths");
     strcpy(missing_benchmarks_path, directory_path);
-    if (directory_path_len && directory_path[directory_path_len - 1] != '/')
-      missing_benchmarks_path[directory_path_len] = '/';
-    strcpy(missing_benchmarks_path + directory_path_len, "benchmarks");
+    missing_benchmarks_path[directory_path_len] = '/';
+    strcpy(missing_benchmarks_path + directory_path_len + 1, "benchmarks");
     benchmarks_path = missing_benchmarks_path;
   }
   if (benchmarks_path && directory_path && directory_exists(benchmarks_path) &&
@@ -809,7 +826,7 @@ int main(int argc, char **argv) {
     assert(!output_file);
   for (size_t i = 0; i != tasks; i++) {
     struct bucket *bucket = buckets + i;
-    vrb(1, "bucket[%zu] maximum-time %.2f seconds, total-memory %.0f MB", i + 1,
+    vrb(1, "bucket[%zu] maximum-time %.2f s, total-memory %.0f MB", i + 1,
         bucket->real, bucket->memory);
     if (bucket->memory > max_total_memory)
       max_total_memory = bucket->memory;
@@ -819,8 +836,8 @@ int main(int argc, char **argv) {
       struct benchmark *benchmark = zummary->benchmark;
       assert(zummary->scheduled);
       assert(benchmark);
-      vrb(2, "%9.0f sec %6.0f MB  %s%s", zummary->real, zummary->memory, zummary->name,
-          zummary->memory_limit_hit ? " *" : "");
+      vrb(2, "%9.0f s %6.0f MB  %s%s", zummary->real, zummary->memory,
+          zummary->name, zummary->memory_limit_hit ? " *" : "");
       if (!generate)
         continue;
       fprintf(output_file, "%zu", ++printed);
@@ -842,16 +859,16 @@ int main(int argc, char **argv) {
   if (verbosity > 0 || max_memory_limit_hit)
     msg("maximum of %zu times memory-limit exceeded in one bucket",
         max_memory_limit_hit);
-  vrb(1, "sum of maximum running times per bucket %.0f seconds", sum_real);
+  vrb(1, "sum of maximum running times per bucket %.0f s", sum_real);
   double core_seconds = bucket_size * sum_real;
   double core_hours = core_seconds / 3600;
-  msg("allocated core-time of %.2f core-hours (%.0f = %zu * %.0f sec)",
+  msg("allocated core-time of %.2f core-hours (%.0f = %zu * %.0f s)",
       core_hours, core_seconds, bucket_size, sum_real);
   double power_usage = core_hours * watt_per_core / 1000.0;
   msg("power-usage of %.3f kWh (%u W * %.2f h / 1000)", power_usage,
       watt_per_core, core_hours);
   double costs = cents_per_kwh * power_usage / 100.0;
-  msg("estimated-costs of %s %.2f (¢ %d * %.3f kWh / 100)",
+  msg("estimated-cost of %s %.2f (¢ %d * %.3f kWh / 100)",
       use_euro_sign ? "€" : "$", costs, cents_per_kwh, power_usage);
   sort_buckets_by_real();
   nodes = calloc(size_nodes, sizeof *nodes);
@@ -880,14 +897,18 @@ int main(int argc, char **argv) {
     next->start = start;
     next->end = end;
     assert(pos != invalid_position);
-    vrb(1, "running bucket[%zu] at node %zu after %.0f seconds (%.0f-%.0f)",
-        i + 1, pos, next->start, next->start, next->end);
+    vrb(1, "running bucket[%zu] at node %zu after %.0f s (%.0f-%.0f)", i + 1,
+        pos, next->start, next->start, next->end);
     nodes[pos] = next;
     if (end > latency)
       latency = end;
   }
-  msg("latency of %.0f seconds (%.2f h running %zu nodes in parallel)", latency,
-      latency / 2600, size_nodes);
+  msg("execution-time span of %.0f s (%.2f h running %zu nodes in parallel)",
+      latency, latency / 2600, size_nodes);
+  if (verbosity == 1)
+    msg("run with two '-v' for bucket allocation details too");
+  if (verbosity == 0)
+    msg("run with '-v' for scheduling details");
   free(nodes);
   for (size_t i = 0; i != tasks; i++)
     free(buckets[i].zummaries);
@@ -899,6 +920,7 @@ int main(int argc, char **argv) {
   free(zummaries);
   free(benchmarks);
   free(missing_benchmarks_path);
+  free(simplified_directory_path);
   free(zummary_path);
   free(line);
   return 0;
