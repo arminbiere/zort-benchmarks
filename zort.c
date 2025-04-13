@@ -4,6 +4,7 @@
 #define FAST_BUCKET_FRACTION 50
 #define FAST_BUCKET_MEMORY 8000
 #define AVAILABLE_NODES 32
+#define AVAILABLE_MEMORY 234000
 #define WATT_PER_CORE 8
 #define CENTS_PER_KWH 27
 
@@ -21,6 +22,7 @@ static const char * usage =
 "  -f <percent>        fraction of fast buckets in percent (default %d%%)\n"
 "  -l <memory>         fast bucket memory limit in MB (default %d MB)\n"
 "  -n <nodes>          assumed number of available nodes (default %d)\n"
+"  -m <memory>         assumed memory in MB per node (default %d MB)\n"
 "  -w <watt>           assumed Watt per core (default %d Watt)\n"
 "  -c <cents>          assumed cents per kWh (default %d cents)\n"
 "  --euro              assume '€' as currency sign (default)\n"
@@ -36,10 +38,11 @@ static const char * usage =
 "produced by the 'zummarize' tool (which is meant to parse 'runlim' output).\n"
 "\n"
 "If 'benchmarks' is missing it is searched as 'benchmarks' next to 'zummary'\n"
-"in the given directory.  The tool then reads both files and tries to\n"
-"match names.  If this is successful it sorts the benchmarks according to\n"
-"the memory usage of that recorded run and time needed to solve them and\n"
-"puts them into buckets of the given size (default 64).\n"
+"in the given directory.  If both are giving, i.e., a directory and a\n"
+"file they can occur in arbitrary order. The tool then reads both files\n"
+"and tries to match names.  If this is successful it sorts the benchmarks\n"
+"according to the memory usage of that recorded run and time needed to\n"
+"solve them and puts them into buckets of the given size (default 64).\n"
 "\n"
 "It then produces a new list of benchmarks ordered by the bucket assignment.\n"
 "If requested through '-g' this list is also printed to 'stdout' (in the\n"
@@ -143,6 +146,8 @@ static size_t scheduled;
 
 static size_t size_nodes;
 static struct bucket **nodes;
+
+static size_t size_memory;
 
 static bool use_euro_sign = true;
 static int watt_per_core = -1;
@@ -522,6 +527,13 @@ int main(int argc, char **argv) {
       if (tmp < 0)
         goto INVALID_ARGUMENT;
       size_nodes = tmp;
+    } else if (!strcmp(arg, "-m")) {
+      if (++i == argc)
+        goto ARGUMENT_MISSING;
+      int tmp = atoi(argv[i]);
+      if (tmp < 0)
+        goto INVALID_ARGUMENT;
+      size_memory = tmp;
     } else if (!strcmp(arg, "-w")) {
       if (++i == argc)
         goto ARGUMENT_MISSING;
@@ -669,6 +681,12 @@ int main(int argc, char **argv) {
     size_nodes = AVAILABLE_NODES;
     vrb(1, "assuming default number of nodes %zu", size_nodes);
   }
+  if (size_memory)
+    vrb(1, "assuming specified available memory of %zu MB", size_memory);
+  else {
+    size_memory = AVAILABLE_MEMORY;
+    vrb(1, "assuming default available meoory of %zu MB", size_memory);
+  }
   if (watt_per_core >= 0)
     vrb(1, "using specified %d Watt per core", watt_per_core);
   else {
@@ -772,11 +790,12 @@ int main(int argc, char **argv) {
     }
   }
   fflush(stdout);
-  msg("maximum total-memory per bucket %.0f MB", max_total_memory);
-  msg("maximum memory per benchmark %.0f MB (%.0f%% maximum total-memory)",
+  msg("maximum bucket-memory %.0f MB (%.0f%% of %zu MB available)", 
+      max_total_memory, percent (max_total_memory, size_memory), size_memory);
+  msg("maximum benchmark-memory %.0f MB (%.0f%% maximum bucket-memory)",
       max_memory, percent(max_memory, max_total_memory));
   if (verbosity > 0 || max_memory_limit_hit)
-    msg("maximum memory limit hit per bucket %zu", max_memory_limit_hit);
+    msg("maximum of %zu times memory-limit exceeded in one bucket", max_memory_limit_hit);
   vrb(1, "sum of maximum running times per bucket %.0f seconds", sum_real);
   double core_seconds = bucket_size * sum_real;
   double core_hours = core_seconds / 3600;
