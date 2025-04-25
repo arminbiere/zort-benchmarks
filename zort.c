@@ -509,8 +509,14 @@ int main(int argc, char **argv) {
   for (int i = 1; i != argc; i++) {
     const char *arg = argv[i];
     if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
-      printf(usage, BUCKET_SIZE, FAST_BUCKET_FRACTION, FAST_BUCKET_MEMORY,
-             WATT_PER_CORE);
+      printf(usage, 
+             BUCKET_SIZE, 
+             FAST_BUCKET_FRACTION,
+             FAST_BUCKET_MEMORY,
+             AVAILABLE_NODES,
+             AVAILABLE_MEMORY,
+             WATT_PER_CORE,
+             CENTS_PER_KWH);
       fflush(stdout);
       return 0;
     } else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet")) {
