@@ -509,14 +509,8 @@ int main(int argc, char **argv) {
   for (int i = 1; i != argc; i++) {
     const char *arg = argv[i];
     if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
-      printf(usage, 
-             BUCKET_SIZE, 
-             FAST_BUCKET_FRACTION,
-             FAST_BUCKET_MEMORY,
-             AVAILABLE_NODES,
-             AVAILABLE_MEMORY,
-             WATT_PER_CORE,
-             CENTS_PER_KWH);
+      printf(usage, BUCKET_SIZE, FAST_BUCKET_FRACTION, FAST_BUCKET_MEMORY,
+             AVAILABLE_NODES, AVAILABLE_MEMORY, WATT_PER_CORE, CENTS_PER_KWH);
       fflush(stdout);
       return 0;
     } else if (!strcmp(arg, "-q") || !strcmp(arg, "--quiet")) {
@@ -920,7 +914,7 @@ int main(int argc, char **argv) {
       latency = end;
   }
   msg("execution-time span of %.0f s (%.2f h running %zu nodes in parallel)",
-      latency, latency / 2600, size_nodes);
+      latency, latency / 3600, size_nodes);
   if (verbosity == 1)
     msg("run with two '-v' for bucket allocation details too");
   if (verbosity == 0)
