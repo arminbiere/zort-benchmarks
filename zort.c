@@ -763,16 +763,29 @@ int main(int argc, char **argv) {
   }
   tasks = size_benchmarks / bucket_size;
   if (tasks * bucket_size == size_benchmarks) {
-    msg("need exactly %zu tasks "
-        "(number of benchmarks multiple of bucket size)",
-        tasks);
+    if (tasks == 1)
+      msg("need exactly one task "
+          "(number of benchmarks matches bucket size)");
+    else
+      msg("need exactly %zu tasks "
+          "(number of benchmarks multiple of bucket size)",
+          tasks);
     last_bucket_size = bucket_size;
   } else {
     tasks++;
     last_bucket_size = size_benchmarks % bucket_size;
-    msg("need %zu buckets "
-        "(%zu full with %zu and one with %zu benchmarks)",
-        tasks, tasks - 1, bucket_size, last_bucket_size);
+    if (tasks > 2)
+      msg("need %zu tasks "
+          "(%zu buckets full with %zu and one with %zu benchmarks)",
+          tasks, tasks - 1, bucket_size, last_bucket_size);
+    else if (tasks == 2)
+      msg("need 2 tasks "
+          "(one bucket full with %zu and one with %zu benchmarks)",
+           bucket_size, last_bucket_size);
+    else
+      msg("need exactly one task "
+          "(with only %zu benchmarks less than bucket size)",
+          last_bucket_size);
   }
   buckets = calloc(tasks, sizeof *buckets);
   if (!buckets)
@@ -812,7 +825,7 @@ int main(int argc, char **argv) {
     sort_zummaries_by_memory();
     size_t last = size_zummaries;
     j = tasks - 1;
-    for (;;) {
+    while (last) {
       struct zummary *zummary = zummaries + --last;
       if (zummary->scheduled)
         continue;
