@@ -8,7 +8,7 @@ To compile use `./configure && make` (see `./configure -h` for options).
 
 Usage
 -----
-
+```
 usage: zort [ <option> ] [ <benchmarks> ] <directory>
 
 where '<option>' is one of the following:
@@ -28,13 +28,13 @@ where '<option>' is one of the following:
   -c <cents>          assumed cents per kWh (default 27 cents)
   --euro              assume '€' as currency sign (default)
   --dollar            assume '$' as currency sign
-
+```
 This tool is supposed to be given two arguments, a 'benchmarks' file and a
 'directory', where 'benchmarks' is a file which has three fields per line
 separated by spaces. The first gives the benchmark order the second gives
 the path to the benchmark and the third a unique name of the benchmark.
 If only two entries are given per line in 'benchmarks' we assume the path
-was ommitted.  The 'directory' is supposed to contain a 'zummary' file
+was omitted.  The 'directory' is supposed to contain a 'zummary' file
 produced by the 'zummarize' tool (which is meant to parse 'runlim' output).
 
 If 'benchmarks' is missing it is searched as 'benchmarks' next to 'zummary'
